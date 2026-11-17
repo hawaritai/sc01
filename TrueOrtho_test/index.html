@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SC01 True Ortho 3D — Hilly DTM &amp; Flight Justification</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="viewport">
+    <div id="canvas-container"></div>
+
+    <!-- LEFT PANEL: VERDICT & FLIGHT PARAMETERS -->
+    <aside class="panel panel-left">
+      <div class="panel-header">
+        <div>
+          <div class="app-title">True Ortho 3D Simulator</div>
+          <div class="app-sub">Sri Lanka Lot 01 &bull; Phase One iXM-150 RGB (40mm)</div>
+        </div>
+        <div style="display:flex; gap:4px;">
+          <button class="btn sm" id="btn-theme" title="Switch White / Dark Theme">Dark</button>
+          <button class="btn sm" id="btn-reset">Reset</button>
+        </div>
+      </div>
+
+      <!-- AOI Area & Flight Preset -->
+      <div class="card">
+        <div class="card-title"><span>AOI Area &amp; Flight Plan</span></div>
+        <select id="aoi-select" title="Select Sri Lanka AOI Region (GEM15 DSM + OSM Buildings or Built-in Sublots)">
+          <option value="poly1">AOI 1: L1 Lower-Right (GEM15 DSM 1 + 345 OSM Bldgs)</option>
+          <option value="poly2">AOI 2: L1 Upper-Left (GEM15 DSM 2 + 420 OSM Bldgs)</option>
+          <option value="01I">Demo: Sublot 01I Hilly + High-Rise Skyline</option>
+          <option value="01C">Demo: Sublot 01C Mountain (209-816m)</option>
+        </select>
+
+        <div class="seg-group" id="surface-mode-seg" title="Switch bare-earth DTM vs Raw GEM15 DSM terrain surface">
+          <button class="seg-btn active" data-smode="dtm">DTM + 3D OSM</button>
+          <button class="seg-btn" data-smode="dsm">Raw GEM15 DSM</button>
+        </div>
+
+        <select id="preset-select">
+          <option value="lot01_actual">1. Actual Lot 01 Flight Plan (SHP Cameras)</option>
+          <option value="sintegra_top">2. Sintegra Priority TOP (1500m, 80/60%)</option>
+          <option value="sintegra_40">3. Reduced Sidelap (1500m, 80/40%)</option>
+          <option value="cloud_750_unadj">4. Low-Alt 750m (Unadjusted Spacing)</option>
+          <option value="cloud_750_adj">5. Low-Alt 750m (Adjusted 80/60%)</option>
+          <option value="steep_hills">6. Tall Urban / Steep Stress Test</option>
+        </select>
+      </div>
+
+      <!-- Real Data & Uploads -->
+      <div class="card">
+        <div class="card-title">
+          <span>Real Data &amp; Uploads</span>
+          <button class="btn sm" id="btn-clear-uploads" title="Revert uploaded terrain, buildings & flight plan back to preset">Clear</button>
+        </div>
+
+        <div class="upload-grid">
+          <button class="btn sm btn-full" id="btn-up-dtm" title="Upload DTM (.tif, .asc, .xyz, .csv)">Upload DTM</button>
+          <button class="btn sm btn-full" id="btn-up-dsm" title="Upload DSM (.tif, .asc, .xyz) — derives building heights via DSM-DTM">Upload DSM</button>
+        </div>
+        <input type="file" id="file-dtm" accept=".tif,.tiff,.asc,.txt,.xyz,.csv" style="display:none;" />
+        <input type="file" id="file-dsm" accept=".tif,.tiff,.asc,.txt,.xyz,.csv" style="display:none;" />
+
+        <div class="osm-row">
+          <input type="text" id="osm-latlon" class="text-input" value="7.75114, 80.00201" title="Center Lat, Lon for OSM Building Footprint fetch" />
+          <button class="btn sm btn-accent" id="btn-fetch-osm" title="Fetch real OpenStreetMap building footprints around Lat, Lon">Fetch OSM</button>
+        </div>
+
+        <div class="upload-grid">
+          <button class="btn sm btn-full" id="btn-up-bldgs" title="Upload Buildings (.geojson, .shp + .dbf, .csv)">Upload Buildings</button>
+          <button class="btn sm btn-full" id="btn-up-flight" title="Upload Flight Plan (.shp + .dbf, .csv EO, .geojson, .kml)">Upload Flight</button>
+        </div>
+        <input type="file" id="file-bldgs" multiple accept=".geojson,.json,.shp,.dbf,.csv,.txt" style="display:none;" />
+        <input type="file" id="file-flight" multiple accept=".shp,.dbf,.csv,.txt,.geojson,.json,.kml" style="display:none;" />
+
+        <div id="shp-sublot-wrap" style="display:none;">
+          <select id="shp-sublot-select" title="Select AOI sublot from uploaded multi-AOI shapefile"></select>
+        </div>
+
+        <div class="status-box" id="data-status">
+          <div><strong>DTM:</strong> Built-in Sublot 01I Hilly</div>
+          <div><strong>Buildings:</strong> 30 Built-in Towers &amp; Blocks</div>
+          <div><strong>Flight:</strong> Lot 01 Sublot 01I (28 cams)</div>
+        </div>
+      </div>
+
+      <!-- True Ortho Verdict -->
+      <div class="card">
+        <div class="card-title">
+          <span>True Ortho Justification</span>
+          <span id="meta-gsd" style="font-family:var(--mono); color:var(--muted);">GSD -- cm</span>
+        </div>
+
+        <div class="seg-group" id="target-seg">
+          <button class="seg-btn active" data-target="both">Both</button>
+          <button class="seg-btn" data-target="nadir">Ground+Roofs</button>
+          <button class="seg-btn" data-target="full3d">Incl. Walls</button>
+        </div>
+
+        <div class="verdict-pill fail" id="verdict-pill">
+          <div class="verdict-row">
+            <span class="verdict-label" id="verdict-label">EVALUATING...</span>
+            <span class="badge fail" id="verdict-badge">--</span>
+          </div>
+          <div class="verdict-desc" id="verdict-desc">Computing 3D terrain &amp; building visibility...</div>
+        </div>
+
+        <div class="stat-line">
+          <span class="stat-name">Ground + Roofs</span>
+          <span class="stat-vals">
+            <span id="stat-nadir">--</span>
+            <span class="badge fail" id="badge-nadir">--</span>
+          </span>
+        </div>
+        <div class="stat-line">
+          <span class="stat-name">Building Walls</span>
+          <span class="stat-vals">
+            <span id="stat-facade">--</span>
+            <span class="badge fail" id="badge-facade">--</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Flight & Terrain Parameters -->
+      <div class="card">
+        <div class="card-title">
+          <span>Flight &amp; Terrain &bull; iXM-150 (40mm)</span>
+          <span id="meta-fp" style="font-family:var(--mono); color:var(--muted);">-- &times; --m</span>
+        </div>
+
+        <div class="slider-item">
+          <div class="slider-head">
+            <span>Camera Height (AGL)</span>
+            <span class="slider-num" id="val-height">1700 m</span>
+          </div>
+          <input type="range" id="sl-height" min="400" max="2400" step="20" value="1700" />
+        </div>
+
+        <label class="chk">
+          <input type="checkbox" id="chk-lock-spacing" />
+          <span>Keep Line/Shot Distance Fixed when Height changes</span>
+        </label>
+
+        <div class="slider-item">
+          <div class="slider-head">
+            <span>Forward Overlap</span>
+            <span class="slider-num" id="val-forelap">80% (214 m)</span>
+          </div>
+          <input type="range" id="sl-forelap" min="20" max="90" step="1" value="80" />
+        </div>
+
+        <div class="slider-item">
+          <div class="slider-head">
+            <span>Side Overlap</span>
+            <span class="slider-num" id="val-sidelap">42% (921 m)</span>
+          </div>
+          <input type="range" id="sl-sidelap" min="0" max="85" step="1" value="42" />
+        </div>
+
+        <div class="slider-item">
+          <div class="slider-head">
+            <span>Flight Line Distance</span>
+            <span class="slider-num" id="val-line-dist">921 m</span>
+          </div>
+          <input type="range" id="sl-line-dist" min="180" max="1600" step="10" value="921" />
+        </div>
+
+        <div class="two-col">
+          <div class="slider-item">
+            <div class="slider-head">
+              <span>Focal Length</span>
+              <span class="slider-num" id="val-focal">40 mm</span>
+            </div>
+            <input type="range" id="sl-focal" min="24" max="95" step="1" value="40" />
+          </div>
+          <div class="slider-item">
+            <div class="slider-head">
+              <span>Heading</span>
+              <span class="slider-num" id="val-heading">90&deg;</span>
+            </div>
+            <input type="range" id="sl-heading" min="0" max="180" step="15" value="90" />
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="slider-item">
+            <div class="slider-head">
+              <span>Roll (&omega;)</span>
+              <span class="slider-num" id="val-omega">0&deg;</span>
+            </div>
+            <input type="range" id="sl-omega" min="-20" max="20" step="1" value="0" />
+          </div>
+          <div class="slider-item">
+            <div class="slider-head">
+              <span>Pitch (&phi;)</span>
+              <span class="slider-num" id="val-phi">0&deg;</span>
+            </div>
+            <input type="range" id="sl-phi" min="-20" max="20" step="1" value="0" />
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="slider-item">
+            <div class="slider-head">
+              <span>DTM Hills</span>
+              <span class="slider-num" id="val-dtm-amp">1.0x (306m)</span>
+            </div>
+            <input type="range" id="sl-dtm-amp" min="0" max="2.0" step="0.1" value="1.0" />
+          </div>
+          <div class="slider-item">
+            <div class="slider-head">
+              <span>Buildings</span>
+              <span class="slider-num" id="val-bldg-h">1.0x</span>
+            </div>
+            <input type="range" id="sl-bldg-h" min="0.3" max="3.0" step="0.1" value="1.0" />
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- RIGHT PANEL: CAMERAS & VISIBILITY -->
+    <aside class="panel panel-right">
+      <div class="card" style="flex:1; min-height:0;">
+        <div class="card-title">
+          <span>Cameras &amp; Visibility</span>
+          <span id="cam-count" style="font-family:var(--mono); color:var(--text);">--/--</span>
+        </div>
+
+        <div class="seg-group" id="color-seg">
+          <button class="seg-btn active" data-cmode="pass_fail">Lit / No Light</button>
+          <button class="seg-btn" data-cmode="heatmap">Overlap Depth</button>
+          <button class="seg-btn" data-cmode="per_camera">Camera Color</button>
+        </div>
+
+        <div style="display:flex; gap:10px; flex-wrap:wrap;">
+          <label class="chk"><input type="checkbox" id="chk-vis" checked /><span>Light</span></label>
+          <label class="chk"><input type="checkbox" id="chk-fp" checked /><span>Footprints</span></label>
+          <label class="chk"><input type="checkbox" id="chk-frustum" checked /><span>Pose Cones</span></label>
+        </div>
+
+        <div class="btn-row">
+          <button class="btn sm" id="btn-all-on">All ON</button>
+          <button class="btn sm" id="btn-all-off">All OFF</button>
+          <button class="btn sm" id="btn-prev">&larr; Prev</button>
+          <button class="btn sm" id="btn-next">Next &rarr;</button>
+        </div>
+
+        <div class="strip-row" id="strip-row"></div>
+
+        <div style="font-size:10.5px; color:var(--dim);">
+          Click a camera in 3D or below to select it. Selected camera highlights in neon.
+        </div>
+
+        <div class="cam-grid" id="cam-grid"></div>
+      </div>
+    </aside>
+
+    <!-- TOP-CENTER FLOATING VIEW BAR -->
+    <div class="view-bar">
+      <button class="btn sm" id="btn-view-3d">3D Hills</button>
+      <button class="btn sm" id="btn-view-top">Top View</button>
+      <button class="btn sm" id="btn-view-valley">Valley Close-Up</button>
+      <button class="btn sm" id="btn-view-cam">Camera POV</button>
+      <button class="btn sm" id="btn-pan" type="button" aria-pressed="false" title="Use left-drag to pan the view">Pan</button>
+    </div>
+
+    <!-- BOTTOM-CENTER LEGEND & CLICK RAY INFO -->
+    <div class="hud-bottom-center">
+      <div class="floating-pill" id="ray-pill" style="display:none; max-width:440px;">
+        <div style="display:flex; justify-content:space-between; gap:10px; margin-bottom:3px;">
+          <strong style="color:var(--accent);">Line-of-Sight Inspector</strong>
+          <button class="btn sm" id="btn-clear-ray" style="padding:1px 6px;">Clear</button>
+        </div>
+        <div id="ray-info" style="color:var(--muted);"></div>
+      </div>
+
+      <div class="floating-pill">
+        <div class="legend-row" id="legend-row"></div>
+        <div style="margin-top:4px; color:var(--dim); font-size:10px; text-align:center;">
+          Drag to Orbit &bull; Right-drag or Shift-drag to Pan &bull; Pan button: left-drag &bull; Scroll to Zoom &bull; Click camera to select &bull; Click surface for sight rays
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="vendor/three.min.js"></script>
+  <script src="vendor/OrbitControls.js"></script>
+  <script src="vendor/geotiff.js"></script>
+  <script src="lot01_aoi_data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
