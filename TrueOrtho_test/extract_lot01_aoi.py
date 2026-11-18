@@ -10,8 +10,7 @@ import struct
 import urllib.parse
 import urllib.request
 
-# LOT01_DIR = r"D:\Projects\0_Current_projects\SC01\FlightPlan\Lot_01"
-LOT01_DIR = r"D:\projects\SC01\FlightPlan\Lot_01"
+LOT01_DIR = r"D:\Projects\0_Current_projects\SC01\FlightPlan\Lot_01"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 OUT_JS = os.path.join(BASE_DIR, "lot01_aoi_data.js")
 SAMPLES_DIR = os.path.join(BASE_DIR, "sample_uploads")

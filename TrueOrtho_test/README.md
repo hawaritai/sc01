@@ -6,12 +6,12 @@ Interactive Three.js 3D visibility, footprint, and flight-plan justification sim
 
 ## 1. Running This Project on Another PC
 
-All runtime libraries (`vendor/three.min.js`, `vendor/OrbitControls.js`, `vendor/geotiff.js`) and built-in Sri Lanka Lot 01 + GEM15 datasets (`lot01_aoi_data.js`) are bundled locally inside `TrueOrtho_test/`. **No internet connection, build step, or npm install is required to run it.** The raw `data/` and `sample_uploads/` folders are kept locally and excluded from Git; they are needed for raw-file uploads or regenerating the baked datasets, but not for the built-in simulator views.
+All runtime libraries (`vendor/three.min.js`, `vendor/OrbitControls.js`, `vendor/geotiff.js`) and built-in Sri Lanka Lot 01 + GEM15 datasets (`lot01_aoi_data.js`) are bundled locally inside `TrueOrtho_test/`. **No internet connection, build step, or npm install is required to run it.**
 
 ### Option A — Windows One-Click Launcher (Recommended)
 1. Extract the portable `.zip` archive on the target PC.
 2. Open the extracted folder and double-click **`start_server.bat`**.
-3. It starts a local HTTP server using Python or Node.js if installed. Open `http://localhost:8090` in your browser.
+3. It automatically starts a local HTTP server on `http://localhost:8090` (using Python or Node.js if installed) and opens the simulator in your browser.
 4. If neither Python nor Node.js is installed, `start_server.bat` opens `index.html` directly in your browser.
 
 ### Option B — macOS / Linux Launcher
@@ -27,15 +27,16 @@ Double-click **`index.html`** directly in Chrome, Edge, or Firefox. Because all 
 
 ---
 
-## 2. Camera Model & Coordinate Auto-Detection
+## 2. Camera Model (Phase One iXM-RS150F), Optics & Visualization Controls
 
-In the 3D viewer, left-drag orbits, right-drag or Shift-drag pans, and the mouse wheel zooms. Click **Pan** in the top view bar to make left-drag pan; click it again to return to orbit.
-
-* **Camera Model (`PRESETS` & initial `state` in `app.js`):** **Phase One iXM-150 RGB (40mm)**
-  * Focal Length: `40 mm`
-  * Sensor Dimensions: `53.407 mm` cross-track (`14,204 px`) × `40.051 mm` along-track (`10,652 px`)
-  * Pixel Pitch: `3.76 µm`
-  * At `1,500 m AGL`, gives `14.1 cm` GSD and a `1502 × 2003 m` swath footprint.
+* **Supported Camera / Lens Presets (`CAMERA_MODELS` & `Camera (iXM-RS150F) & Flight Controls`):**
+  * **iXM-RS150F 40mm** *(default)*: `40 mm` focal length, `53.407 × 40.051 mm` sensor (`14,204 × 10,652 px`, `3.76 µm`), FOV **67.5° (Long) × 53.2° (Short)**, Entrance pupil `94.1 mm` (`14.1 cm` GSD and `1502 × 2003 m` swath at `1,500 m AGL`).
+  * **iXM-RS150F 50mm**: `50 mm` focal length, `53.407 × 40.051 mm` sensor (`14,204 × 10,652 px`, `3.76 µm`), FOV **56.2° (Long) × 43.7° (Short)**, Entrance pupil `99.3 mm` (`11.3 cm` GSD and `1202 × 1602 m` swath at `1,500 m AGL`).
+  * **Custom & Interactive Optical Sliders**: Directly adjust **Focal Length (`mm`)**, **FOV Long / Cross (`°`)**, **FOV Short / Along (`°`)**, **Sensor Cross (`mm`)**, **Sensor Along (`mm`)**, **Pixel Pitch (`µm`)**, and click **`Swap 90°`** to rotate the sensor between Cross-Track and Along-Track orientation.
+* **Base Map Wrapped on 3D DSM / DTM**:
+  * Use the **Base Map** dropdown in the top card to drape **Satellite Imagery (Esri)**, **Satellite + Roads Hybrid**, **OpenStreetMap Streets**, **Topographic Map**, **None (Elevation Tint)**, or a **Custom Map Image** (via **`Upload Map`**, supporting `.jpg`, `.png`, `.webp`) directly onto the 3D terrain / DSM surface.
+* **Light Transparency / Opacity Slider (`Cameras & Visibility` right panel)**:
+  * Drag **`Light Opacity (Red / Green)`** (`0%`–`100%`, default `70%`) to blend the Red/Green coverage light cleanly over the Base Map and 3D buildings (`0%` reveals pure underlying imagery/DSM; `100%` shows solid opaque visibility light).
 * **Automatic Coordinate Reference System (CRS) Detection (`detectCrsAndToWorld`):**
   * **WGS84 Geographic (`lon`, `lat`)**: When `|X| <= 180` and `|Y| <= 90`, coordinates are automatically projected to `EPSG:3857` meters.
   * **Local Meter Grid**: When `|X| < 25,000` and `|Y| < 25,000`, coordinates are treated as local meters centered near `(0, 0)`.

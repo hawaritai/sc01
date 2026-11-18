@@ -183,13 +183,42 @@
     },
   };
 
+  const CAMERA_MODELS = {
+    ixm_rs150f_40: {
+      label: "Phase One iXM-RS150F 40mm",
+      focalMm: 40,
+      sensorCrossMm: 53.407,
+      sensorAlongMm: 40.051,
+      pixelUm: 3.76,
+      pupilMm: 94.1,
+    },
+    ixm_rs150f_50: {
+      label: "Phase One iXM-RS150F 50mm",
+      focalMm: 50,
+      sensorCrossMm: 53.407,
+      sensorAlongMm: 40.051,
+      pixelUm: 3.76,
+      pupilMm: 99.3,
+    },
+  };
+
   const state = {
     aoiKey: "poly1",         // 'poly1' | 'poly2' | '01I' | '01C'
     surfaceMode: "dtm",      // 'dtm' | 'dsm'
+    baseMapMode: "google_sat", // 'google_sat' | 'google_hybrid' | 'satellite' | 'osm' | 'topo' | 'none' | 'custom'
+    baseMapZoom: 17,           // 15 (4.8m/px) .. 18 (0.6m/px)
+    showBaseMapLayer: true,
+    showBldgsLayer: true,
+    showContoursLayer: true,
+    crsMode: "EPSG:3857",
+    lastHoverWorldXZ: null,
+    customBaseMapImg: null,
     presetKey: "lot01_actual",
+    camModel: "ixm_rs150f_40",
     targetMode: "both",      // 'both' | 'nadir' | 'full3d'
     colorMode: "pass_fail",  // 'pass_fail' | 'heatmap' | 'per_camera'
     showVisColoring: true,
+    lightOpacity: 0.70,
     showFootprints: true,
     showFrustums: true,
     lockSpacing: false,
@@ -205,6 +234,7 @@
     sensorAlongMm: 40.051,
     sensorCrossMm: 53.407,
     pixelUm: 3.76,
+    pupilMm: 94.1,
     nominalGsdCm: null,
     omega: 0,
     phi: 0,
@@ -231,8 +261,9 @@
 
   // Three.js & geometry state
   let scene, camera, renderer, controls, raycaster;
-  let panMode = false;
-  let dtmGroup, dtmMesh, dtmContourLines, dtmSkirtMesh, aoiBorderLine;
+  let dtmGroup, dtmMesh, dtmLightOverlayMesh, dtmContourLines, dtmSkirtMesh, aoiBorderLine;
+  let ovVertexGridIdx = new Int32Array(0);
+  let baseMapCanvas = null, hillCanvas = null, baseMapTexture = null, baseMapReqId = 0, lastBaseMapKey = "";
   let buildingsGroup, buildingsMesh, buildingsEdgeLines;
   let flightGroup, rayGroup;
   let cameraPickMeshes = [];
@@ -266,6 +297,8 @@
     bIdx: null,
     area: null,
     vertStart: null,
+    vertCount: null,
+    visR: null, visG: null, visB: null,
     colorAttr: null,
     faceMeta: [],
   };
@@ -283,6 +316,66 @@
     const lon = (x / 20037508.342789244) * 180.0;
     const lat = (2.0 * Math.atan(Math.exp(y / 6378137.0)) - Math.PI / 2.0) * (180.0 / Math.PI);
     return [lat, lon];
+  }
+
+  function wgs84ToUtm44N(latDeg, lonDeg) {
+    const a = 6378137.0;
+    const f = 1.0 / 298.257223563;
+    const e2 = 2 * f - f * f;
+    const ep2 = e2 / (1 - e2);
+    const k0 = 0.9996;
+    const lat = (latDeg * Math.PI) / 180;
+    const lon = (lonDeg * Math.PI) / 180;
+    const lon0 = (81.0 * Math.PI) / 180;
+    const sinLat = Math.sin(lat), cosLat = Math.cos(lat), tanLat = Math.tan(lat);
+    const N = a / Math.sqrt(1 - e2 * sinLat * sinLat);
+    const T = tanLat * tanLat;
+    const C = ep2 * cosLat * cosLat;
+    const A = cosLat * (lon - lon0);
+    const M = a * (
+      (1 - e2 / 4 - (3 * e2 * e2) / 64 - (5 * e2 * e2 * e2) / 256) * lat -
+      ((3 * e2) / 8 + (3 * e2 * e2) / 32 + (45 * e2 * e2 * e2) / 1024) * Math.sin(2 * lat) +
+      ((15 * e2 * e2) / 256 + (45 * e2 * e2 * e2) / 1024) * Math.sin(4 * lat) -
+      ((35 * e2 * e2 * e2) / 3072) * Math.sin(6 * lat)
+    );
+    const east = 500000 + k0 * N * (
+      A + ((1 - T + C) * A * A * A) / 6 +
+      ((5 - 18 * T + T * T + 72 * C - 58 * ep2) * A * A * A * A * A) / 120
+    );
+    const north = k0 * (
+      M + N * tanLat * (
+        (A * A) / 2 + ((5 - T + 9 * C + 4 * C * C) * A * A * A * A) / 24 +
+        ((61 - 58 * T + T * T + 600 * C - 330 * ep2) * A * A * A * A * A * A) / 720
+      )
+    );
+    return [east, north];
+  }
+
+  function updateHoverCoordinateUI(threeX, elevY, threeZ) {
+    state.lastHoverWorldXZ = [threeX, elevY, threeZ];
+    const isLocalData = !!(state.customDtm && state.customDtm.isLocal);
+    const mx = state.originEpsg3857[0] + threeX;
+    const my = state.originEpsg3857[1] - threeZ;
+    const [lat, lon] = epsg3857ToWgs84(mx, my);
+
+    let coordText = "";
+    if (state.crsMode === "LOCAL" || isLocalData) {
+      coordText = `X ${threeX.toFixed(1)}, Y ${(-threeZ).toFixed(1)} m`;
+    } else if (state.crsMode === "EPSG:4326") {
+      coordText = `${lon.toFixed(6)}°, ${lat.toFixed(6)}°`;
+    } else if (state.crsMode === "EPSG:32644") {
+      const [ue, un] = wgs84ToUtm44N(lat, lon);
+      coordText = `${ue.toFixed(1)} E, ${un.toFixed(1)} N`;
+    } else {
+      coordText = `${mx.toFixed(1)} E, ${my.toFixed(1)} N`;
+    }
+
+    const xyEl = document.getElementById("coord-xy");
+    const llEl = document.getElementById("coord-latlon");
+    const zEl = document.getElementById("coord-elev");
+    if (xyEl) xyEl.textContent = coordText;
+    if (llEl) llEl.textContent = isLocalData ? "Local Grid" : `${lat.toFixed(5)}°, ${lon.toFixed(5)}°`;
+    if (zEl) zEl.textContent = `${elevY.toFixed(1)} m`;
   }
 
   function detectCrsAndToWorld(x, y) {
@@ -562,16 +655,386 @@
   }
 
   function getNaturalTerrainColor(elev) {
+    // Neutral QGIS hillshade grey/slate so Red/Green light opacity fades unmistakably against DSM
     const t = Math.max(0, Math.min(1, (elev - dtmGrid.minZ) / Math.max(10, dtmGrid.maxZ - dtmGrid.minZ)));
-    const cValley = new THREE.Color("#25453d");
-    const cSlope = new THREE.Color("#496348");
-    const cRidge = new THREE.Color("#8a795d");
-    const cPeak = new THREE.Color("#b8a890");
+    const cLow = new THREE.Color("#565e68");
+    const cMid = new THREE.Color("#737b85");
+    const cHigh = new THREE.Color("#939ba6");
+    const cPeak = new THREE.Color("#b8c0ca");
     const c = new THREE.Color();
-    if (t < 0.38) c.copy(cValley).lerp(cSlope, t / 0.38);
-    else if (t < 0.78) c.copy(cSlope).lerp(cRidge, (t - 0.38) / 0.40);
-    else c.copy(cRidge).lerp(cPeak, (t - 0.78) / 0.22);
+    if (t < 0.35) c.copy(cLow).lerp(cMid, t / 0.35);
+    else if (t < 0.72) c.copy(cMid).lerp(cHigh, (t - 0.35) / 0.37);
+    else c.copy(cHigh).lerp(cPeak, (t - 0.72) / 0.28);
     return c;
+  }
+
+  function renderProceduralBaseMap(ctx, W, H, mode) {
+    if (!ctx) return;
+    if (!hillCanvas) {
+      hillCanvas = document.createElement("canvas");
+      hillCanvas.width = 512;
+      hillCanvas.height = 512;
+    }
+    const hW = hillCanvas.width || 512;
+    const hH = hillCanvas.height || 512;
+    const hCtx = hillCanvas.getContext ? hillCanvas.getContext("2d") : null;
+    if (!hCtx) return;
+
+    const isLightMap = mode === "osm" || mode === "topo";
+    const imgData = hCtx.createImageData(hW, hH);
+    const d = imgData.data;
+    const invSpan = 1 / Math.max(10, dtmGrid.maxZ - dtmGrid.minZ);
+    const sx = (DTM_NX - 1) / (hW - 1);
+    const sy = (DTM_NZ - 1) / (hH - 1);
+    const lx = 0.56, ly = 0.68, lz = 0.47;
+
+    for (let py = 0; py < hH; py++) {
+      const gy = py * sy;
+      const j0 = Math.min(DTM_NZ - 2, Math.floor(gy));
+      const fy = gy - j0;
+      for (let px = 0; px < hW; px++) {
+        const gx = px * sx;
+        const i0 = Math.min(DTM_NX - 2, Math.floor(gx));
+        const fx = gx - i0;
+        const k00 = j0 * DTM_NX + i0;
+        const elev =
+          dtmGrid.elev[k00] * (1 - fx) * (1 - fy) +
+          dtmGrid.elev[k00 + 1] * fx * (1 - fy) +
+          dtmGrid.elev[k00 + DTM_NX] * (1 - fx) * fy +
+          dtmGrid.elev[k00 + DTM_NX + 1] * fx * fy;
+        const nx = dtmGrid.normX[k00], ny = dtmGrid.normY[k00], nz = dtmGrid.normZ[k00];
+        const shade = Math.max(0.55, Math.min(1.22, 0.55 + 0.68 * Math.max(0, nx * lx + ny * ly + nz * lz)));
+        const t = Math.max(0, Math.min(1, (elev - dtmGrid.minZ) * invSpan));
+        const p = (py * hW + px) * 4;
+        if (isLightMap) {
+          d[p] = Math.min(255, (230 - 30 * t) * shade);
+          d[p + 1] = Math.min(255, (234 - 22 * t) * shade);
+          d[p + 2] = Math.min(255, (224 - 36 * t) * shade);
+        } else {
+          // Neutral hillshade under satellite tiles before remote tiles finish loading
+          const base = 78 + 70 * t;
+          d[p] = Math.min(255, base * shade);
+          d[p + 1] = Math.min(255, (base + 4) * shade);
+          d[p + 2] = Math.min(255, (base + 8) * shade);
+        }
+        d[p + 3] = 255;
+      }
+    }
+    hCtx.putImageData(imgData, 0, 0);
+    ctx.drawImage(hillCanvas, 0, 0, W, H);
+  }
+
+  function loadMapTileImage(url) {
+    return new Promise((resolve) => {
+      if (typeof Image === "undefined") { resolve(null); return; }
+      const img = new Image();
+      img.crossOrigin = "anonymous";
+      img.onload = () => resolve(img);
+      img.onerror = () => resolve(null);
+      img.src = url;
+    });
+  }
+
+  function syncDtmBaseMaterial() {
+    if (!dtmMesh || !dtmMesh.material) return;
+    const mat = dtmMesh.material;
+    const active = state.showBaseMapLayer && state.baseMapMode !== "none";
+    const wantMap = active && baseMapTexture ? baseMapTexture : null;
+    const wantVertCol = !wantMap;
+    if (mat.map !== wantMap || mat.vertexColors !== wantVertCol) {
+      mat.map = wantMap;
+      mat.vertexColors = wantVertCol;
+      mat.color.setHex(0xffffff);
+      mat.needsUpdate = true;
+    }
+  }
+
+  function getEffectiveBaseMapZoom() {
+    const zReq = Math.max(15, Math.min(18, Number(state.baseMapZoom) || 17));
+    return state.baseMapMode === "topo" ? Math.min(zReq, 17) : zReq;
+  }
+
+  function getTargetBaseMapDim(z) {
+    const maxTex = renderer && renderer.capabilities && renderer.capabilities.maxTextureSize
+      ? Math.min(4096, renderer.capabilities.maxTextureSize)
+      : 4096;
+    if (z >= 17) return maxTex;
+    if (z === 16) return Math.min(2048, maxTex);
+    return 1024;
+  }
+
+  function ensureBaseMapTexture(targetDim) {
+    const dim = targetDim || getTargetBaseMapDim(getEffectiveBaseMapZoom());
+    const dimChanged = baseMapCanvas && (baseMapCanvas.width !== dim || baseMapCanvas.height !== dim);
+    if (!baseMapCanvas) {
+      baseMapCanvas = document.createElement("canvas");
+      baseMapCanvas.width = dim;
+      baseMapCanvas.height = dim;
+    } else if (dimChanged) {
+      baseMapCanvas.width = dim;
+      baseMapCanvas.height = dim;
+      if (baseMapTexture) {
+        baseMapTexture.dispose();
+        baseMapTexture = null;
+      }
+    }
+    if (!baseMapTexture) {
+      baseMapTexture = new THREE.CanvasTexture(baseMapCanvas);
+      baseMapTexture.wrapS = THREE.ClampToEdgeWrapping;
+      baseMapTexture.wrapT = THREE.ClampToEdgeWrapping;
+      baseMapTexture.minFilter = THREE.LinearMipmapLinearFilter;
+      baseMapTexture.magFilter = THREE.LinearFilter;
+      baseMapTexture.generateMipmaps = true;
+      const maxAniso = renderer && renderer.capabilities && renderer.capabilities.getMaxAnisotropy
+        ? renderer.capabilities.getMaxAnisotropy()
+        : 16;
+      baseMapTexture.anisotropy = Math.min(16, Math.max(1, maxAniso));
+    }
+    return baseMapTexture;
+  }
+
+  function buildTileUrl(mode, z, tileX, iy) {
+    const shard = (tileX + iy) & 3;
+    if (mode === "google_hybrid") return `https://mt${shard}.google.com/vt/lyrs=y&x=${tileX}&y=${iy}&z=${z}`;
+    if (mode === "satellite") return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${iy}/${tileX}`;
+    if (mode === "osm") return `https://tile.openstreetmap.org/${z}/${tileX}/${iy}.png`;
+    if (mode === "topo") return `https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/${z}/${iy}/${tileX}`;
+    return `https://mt${shard}.google.com/vt/lyrs=s&x=${tileX}&y=${iy}&z=${z}`;
+  }
+
+  function collectTilesForZoom(z, W, H, ox, oy) {
+    const M = 20037508.342789244;
+    const N = 1 << z;
+    const minMx = ox - DTM_HALF, maxMx = ox + DTM_HALF;
+    const minMy = oy - DTM_HALF, maxMy = oy + DTM_HALF;
+
+    const txMin = ((minMx + M) / (2 * M)) * N;
+    const txMax = ((maxMx + M) / (2 * M)) * N;
+    const tyMin = ((M - maxMy) / (2 * M)) * N;
+    const tyMax = ((M - minMy) / (2 * M)) * N;
+    const spanTx = txMax - txMin;
+    const spanTy = tyMax - tyMin;
+    const txMid = 0.5 * (txMin + txMax);
+    const tyMid = 0.5 * (tyMin + tyMax);
+
+    const tiles = [];
+    const ix0 = Math.floor(txMin), ix1 = Math.floor(txMax);
+    const iy0 = Math.floor(tyMin), iy1 = Math.floor(tyMax);
+
+    for (let iy = iy0; iy <= iy1; iy++) {
+      if (iy < 0 || iy >= N) continue;
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const tileX = ((ix % N) + N) % N;
+        const dist2 = (ix + 0.5 - txMid) ** 2 + (iy + 0.5 - tyMid) ** 2;
+        tiles.push({
+          tileX,
+          iy,
+          dx: ((ix - txMin) / spanTx) * W,
+          dy: ((iy - tyMin) / spanTy) * H,
+          dw: (1 / spanTx) * W + 0.9,
+          dh: (1 / spanTy) * H + 0.9,
+          dist2,
+        });
+      }
+    }
+    tiles.sort((a, b) => a.dist2 - b.dist2);
+    return tiles;
+  }
+
+  function setQmsStatusText(txt) {
+    const el = document.getElementById("qms-status");
+    if (el) el.textContent = txt;
+  }
+
+  function updateBaseMapTexture(forceReload = false) {
+    const targetZ = getEffectiveBaseMapZoom();
+    const targetDim = getTargetBaseMapDim(targetZ);
+    ensureBaseMapTexture(targetDim);
+    syncDtmBaseMaterial();
+
+    if (!state.showBaseMapLayer || state.baseMapMode === "none") {
+      lastBaseMapKey = "none";
+      setQmsStatusText("Off");
+      return;
+    }
+
+    const imgUid = state.customBaseMapImg ? (state.customBaseMapImg._uid || "img") : "";
+    const key = `${state.baseMapMode}|z${targetZ}|d${targetDim}|${state.originEpsg3857[0].toFixed(1)}|${state.originEpsg3857[1].toFixed(1)}|${state.dtmReliefAmp.toFixed(1)}|${imgUid}`;
+    if (!forceReload && lastBaseMapKey === key) return;
+    lastBaseMapKey = key;
+
+    const W = baseMapCanvas.width || targetDim;
+    const H = baseMapCanvas.height || targetDim;
+
+    if (state.baseMapMode === "custom") {
+      setQmsStatusText("Custom");
+    } else {
+      setQmsStatusText(`HD z${targetZ} • ${W}px`);
+    }
+
+    const ctx = baseMapCanvas.getContext ? baseMapCanvas.getContext("2d") : null;
+    if (!ctx) return;
+
+    const reqId = ++baseMapReqId;
+
+    if (state.baseMapMode === "custom") {
+      if (state.customBaseMapImg) {
+        ctx.clearRect(0, 0, W, H);
+        ctx.drawImage(state.customBaseMapImg, 0, 0, W, H);
+      } else {
+        renderProceduralBaseMap(ctx, W, H, "google_sat");
+      }
+      baseMapTexture.needsUpdate = true;
+      return;
+    }
+
+    // Fast procedural relief underlay while streaming tiles
+    renderProceduralBaseMap(ctx, W, H, state.baseMapMode);
+    baseMapTexture.needsUpdate = true;
+
+    const ox = state.originEpsg3857[0];
+    const oy = state.originEpsg3857[1];
+    const mode = state.baseMapMode;
+
+    // Stage 1: Fast z=15 base preview (< 200ms) while Stage 2 high-res center-out tiles download
+    let stage1Done = targetZ <= 15;
+    const hiTiles = collectTilesForZoom(targetZ, W, H, ox, oy);
+    setQmsStatusText(`z${targetZ} 0/${hiTiles.length}`);
+
+    const loadedHiBuffer = [];
+    const flushHiBuffer = () => {
+      if (!loadedHiBuffer.length || reqId !== baseMapReqId) return;
+      for (const item of loadedHiBuffer) {
+        ctx.drawImage(item.img, item.t.dx, item.t.dy, item.t.dw, item.t.dh);
+      }
+      loadedHiBuffer.length = 0;
+      baseMapTexture.needsUpdate = true;
+    };
+
+    if (!stage1Done) {
+      const previewTiles = collectTilesForZoom(15, W, H, ox, oy);
+      const previewPromises = previewTiles.map((t) =>
+        loadMapTileImage(buildTileUrl(mode, 15, t.tileX, t.iy)).then((img) => {
+          if (reqId === baseMapReqId && img && !stage1Done) {
+            ctx.drawImage(img, t.dx, t.dy, t.dw, t.dh);
+          }
+        })
+      );
+      Promise.all(previewPromises).then(() => {
+        if (reqId !== baseMapReqId) return;
+        stage1Done = true;
+        baseMapTexture.needsUpdate = true;
+        flushHiBuffer();
+      });
+      setTimeout(() => {
+        if (reqId === baseMapReqId && !stage1Done) {
+          stage1Done = true;
+          flushHiBuffer();
+        }
+      }, 350);
+    }
+
+    // Stage 2: Center-out bounded concurrency queue (12 parallel tile requests)
+    let cursor = 0;
+    let completed = 0;
+    const total = hiTiles.length;
+    const WORKERS = Math.min(12, total);
+
+    const runWorker = async () => {
+      while (cursor < total && reqId === baseMapReqId) {
+        const t = hiTiles[cursor++];
+        const img = await loadMapTileImage(buildTileUrl(mode, targetZ, t.tileX, t.iy));
+        if (reqId !== baseMapReqId) return;
+        completed++;
+        if (img) {
+          if (stage1Done) {
+            ctx.drawImage(img, t.dx, t.dy, t.dw, t.dh);
+            if (completed % 8 === 0 || completed === total) {
+              baseMapTexture.needsUpdate = true;
+            }
+          } else {
+            loadedHiBuffer.push({ t, img });
+          }
+        }
+        setQmsStatusText(completed === total ? `HD z${targetZ} ✓` : `z${targetZ} ${completed}/${total}`);
+      }
+    };
+
+    for (let w = 0; w < WORKERS; w++) {
+      runWorker();
+    }
+  }
+
+  function buildDtmLightOverlayMesh() {
+    if (dtmLightOverlayMesh && dtmGroup) {
+      dtmGroup.remove(dtmLightOverlayMesh);
+      if (dtmLightOverlayMesh.geometry) dtmLightOverlayMesh.geometry.dispose();
+      if (dtmLightOverlayMesh.material) dtmLightOverlayMesh.material.dispose();
+      dtmLightOverlayMesh = null;
+    }
+
+    const step = (2 * DTM_HALF) / (DTM_NX - 1);
+    const gridToOv = new Int32Array(DTM_NX * DTM_NZ);
+    gridToOv.fill(-1);
+    const positions = [];
+    const colors = [];
+    const gridList = [];
+    const indices = [];
+
+    const ensureVert = (k) => {
+      if (gridToOv[k] >= 0) return gridToOv[k];
+      const i = k % DTM_NX;
+      const j = (k - i) / DTM_NX;
+      const ovIdx = gridList.length;
+      gridToOv[k] = ovIdx;
+      gridList.push(k);
+      positions.push(-DTM_HALF + i * step, dtmGrid.elev[k] + 0.35, -DTM_HALF + j * step);
+      colors.push(0.10, 0.78, 0.48);
+      return ovIdx;
+    };
+
+    for (let j = 0; j < DTM_NZ - 1; j++) {
+      for (let i = 0; i < DTM_NX - 1; i++) {
+        const k00 = j * DTM_NX + i;
+        const k10 = k00 + 1;
+        const k01 = (j + 1) * DTM_NX + i;
+        const k11 = k01 + 1;
+        if (!dtmGrid.inAoi[k00] || !dtmGrid.inAoi[k10] || !dtmGrid.inAoi[k01] || !dtmGrid.inAoi[k11]) {
+          continue;
+        }
+        // Standard PlaneGeometry winding (0, 2, 1) and (2, 3, 1) for outward +Y normal
+        if (!(dtmGrid.insideBldg[k00] && dtmGrid.insideBldg[k01] && dtmGrid.insideBldg[k10])) {
+          indices.push(ensureVert(k00), ensureVert(k01), ensureVert(k10));
+        }
+        if (!(dtmGrid.insideBldg[k01] && dtmGrid.insideBldg[k11] && dtmGrid.insideBldg[k10])) {
+          indices.push(ensureVert(k01), ensureVert(k11), ensureVert(k10));
+        }
+      }
+    }
+
+    ovVertexGridIdx = new Int32Array(gridList);
+    const ovGeom = new THREE.BufferGeometry();
+    ovGeom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+    ovGeom.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+    ovGeom.setIndex(indices);
+
+    const op = state.showVisColoring ? Math.max(0, Math.min(1, state.lightOpacity)) : 0.0;
+    dtmLightOverlayMesh = new THREE.Mesh(
+      ovGeom,
+      new THREE.MeshBasicMaterial({
+        vertexColors: true,
+        transparent: true,
+        opacity: op,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        polygonOffset: true,
+        polygonOffsetFactor: -2,
+        polygonOffsetUnits: -2,
+      })
+    );
+    dtmLightOverlayMesh.renderOrder = 2;
+    dtmLightOverlayMesh.visible = op > 0.005;
+    if (dtmGroup) dtmGroup.add(dtmLightOverlayMesh);
   }
 
   function buildDtmMeshes() {
@@ -580,6 +1043,7 @@
       if (ch.geometry) ch.geometry.dispose();
       if (ch.material) ch.material.dispose();
     }
+    dtmLightOverlayMesh = null;
 
     const size = DTM_HALF * 2;
     const geom = new THREE.PlaneGeometry(size, size, DTM_NX - 1, DTM_NZ - 1);
@@ -603,11 +1067,20 @@
     geom.setAttribute("color", new THREE.BufferAttribute(colors, 3));
     geom.computeVertexNormals();
 
+    ensureBaseMapTexture();
+    const useBaseMap = state.showBaseMapLayer && state.baseMapMode !== "none";
     dtmMesh = new THREE.Mesh(
       geom,
-      new THREE.MeshLambertMaterial({ vertexColors: true })
+      new THREE.MeshLambertMaterial({
+        vertexColors: !useBaseMap,
+        map: useBaseMap ? baseMapTexture : null,
+        color: 0xffffff,
+      })
     );
     dtmGroup.add(dtmMesh);
+
+    buildDtmLightOverlayMesh();
+    updateBaseMapTexture(false);
 
     // Solid geological block side skirts down below lowest elevation
     const skirtVerts = [];
@@ -703,6 +1176,7 @@
       cGeom,
       new THREE.LineBasicMaterial({ color: 0x0f172a, transparent: true, opacity: 0.32 })
     );
+    dtmContourLines.visible = state.showContoursLayer;
     dtmGroup.add(dtmContourLines);
 
     // Glowing Cyan Evaluation AOI Border draped on hills
@@ -1162,6 +1636,9 @@
     buildingPatches.area = new Float32Array(nP);
     buildingPatches.vertStart = new Int32Array(nP);
     buildingPatches.vertCount = new Uint8Array(nP);
+    buildingPatches.visR = new Float32Array(nP);
+    buildingPatches.visG = new Float32Array(nP);
+    buildingPatches.visB = new Float32Array(nP);
     buildingPatches.colorAttr = colorAttr;
     buildingPatches.faceMeta = faceMeta;
 
@@ -1220,12 +1697,48 @@
       }
     }
 
+    buildingsGroup.visible = state.showBldgsLayer;
+    buildDtmLightOverlayMesh();
     document.getElementById("val-bldg-h").textContent = `${state.bldgHeightScale.toFixed(1)}x (${Math.round(maxH)}m)`;
   }
 
   // =========================================================================
   // 4. Flight Lines, Cameras & Terrain-Draped Footprints
   // =========================================================================
+  function degToRad(d) {
+    return (d * Math.PI) / 180;
+  }
+
+  function radToDeg(r) {
+    return (r * 180) / Math.PI;
+  }
+
+  function getFovCrossDeg() {
+    return radToDeg(2 * Math.atan((state.sensorCrossMm * 0.5) / state.focalMm));
+  }
+
+  function getFovAlongDeg() {
+    return radToDeg(2 * Math.atan((state.sensorAlongMm * 0.5) / state.focalMm));
+  }
+
+  function refreshCameraModelTag() {
+    const match = Object.entries(CAMERA_MODELS).find(([, m]) =>
+      Math.abs(state.focalMm - m.focalMm) < 0.05 &&
+      Math.abs(state.pixelUm - m.pixelUm) < 0.01 &&
+      (
+        (Math.abs(state.sensorCrossMm - m.sensorCrossMm) < 0.05 && Math.abs(state.sensorAlongMm - m.sensorAlongMm) < 0.05) ||
+        (Math.abs(state.sensorCrossMm - m.sensorAlongMm) < 0.05 && Math.abs(state.sensorAlongMm - m.sensorCrossMm) < 0.05)
+      )
+    );
+    if (match) {
+      state.camModel = match[0];
+      state.pupilMm = match[1].pupilMm;
+    } else {
+      state.camModel = "custom";
+      state.pupilMm = null;
+    }
+  }
+
   function getSensorHalfTans() {
     return {
       halfTanU: (state.sensorAlongMm * 0.5) / state.focalMm,
@@ -1715,8 +2228,8 @@
     return { inFrustum: true, visible: blocker === -1, blocker };
   }
 
-  function getVisColor(hits, sumR, sumG, sumB, baseR, baseG, baseB) {
-    if (!state.showVisColoring) return [baseR, baseG, baseB];
+  function getVisColor(hits, sumR, sumG, sumB, baseR, baseG, baseB, ignoreToggle = false) {
+    if (!ignoreToggle && !state.showVisColoring) return [baseR, baseG, baseB];
     if (state.colorMode === "pass_fail") {
       return hits >= 1 ? [0.10, 0.78, 0.48] : [0.92, 0.16, 0.20];
     }
@@ -1729,6 +2242,40 @@
     // per_camera
     if (hits === 0) return [0.58, 0.10, 0.13];
     return [Math.min(1, sumR / hits), Math.min(1, sumG / hits), Math.min(1, sumB / hits)];
+  }
+
+  function applyLightOpacity() {
+    const op = state.showVisColoring ? Math.max(0, Math.min(1, state.lightOpacity)) : 0.0;
+    if (dtmLightOverlayMesh && dtmLightOverlayMesh.material) {
+      dtmLightOverlayMesh.material.opacity = op;
+      dtmLightOverlayMesh.material.needsUpdate = true;
+      dtmLightOverlayMesh.visible = op > 0.005;
+    }
+
+    const bp = buildingPatches;
+    if (bp && bp.count > 0 && bp.colorAttr && bp.visR) {
+      const bColArr = bp.colorAttr.array;
+      for (let i = 0; i < bp.count; i++) {
+        const isRoof = bp.isRoof[i] === 1;
+        const baseR = isRoof ? 0.72 : 0.54;
+        const baseG = isRoof ? 0.76 : 0.60;
+        const baseB = isRoof ? 0.82 : 0.68;
+        const area = bp.area[i];
+        const r = area === 0 ? 0.25 : baseR * (1 - op) + bp.visR[i] * op;
+        const g = area === 0 ? 0.30 : baseG * (1 - op) + bp.visG[i] * op;
+        const b = area === 0 ? 0.35 : baseB * (1 - op) + bp.visB[i] * op;
+
+        const vs = bp.vertStart[i] * 3;
+        const vc = bp.vertCount ? bp.vertCount[i] : 4;
+        for (let v = 0; v < vc; v++) {
+          bColArr[vs + v * 3] = r;
+          bColArr[vs + v * 3 + 1] = g;
+          bColArr[vs + v * 3 + 2] = b;
+        }
+      }
+      bp.colorAttr.needsUpdate = true;
+    }
+    updateLegend();
   }
 
   function evaluateVisibility() {
@@ -1744,11 +2291,13 @@
     let roofTotal = 0, roofLit = 0, roofUnlitCount = 0;
     let facadeTotal = 0, facadeLit = 0, facadeUnlitCount = 0;
 
-    // 1. Evaluate 3D Hilly DTM Vertices
+    // 1. Evaluate 3D Hilly DTM / DSM Vertices -> write RGB to AOI-only dtmLightOverlayMesh
+    syncDtmBaseMaterial();
     const step = (2 * DTM_HALF) / (DTM_NX - 1);
     const cellArea = step * step;
     const dtmColAttr = dtmMesh.geometry.attributes.color;
     const dtmColArr = dtmColAttr.array;
+    const gridVisRgb = new Float32Array(DTM_NX * DTM_NZ * 3);
 
     for (let j = 0; j < DTM_NZ; j++) {
       const pz = -DTM_HALF + j * step;
@@ -1758,11 +2307,14 @@
         const py = dtmGrid.elev[idx];
         const nat = getNaturalTerrainColor(py);
 
+        dtmColArr[idx * 3] = nat.r;
+        dtmColArr[idx * 3 + 1] = nat.g;
+        dtmColArr[idx * 3 + 2] = nat.b;
+
         if (!dtmGrid.inAoi[idx] || dtmGrid.insideBldg[idx]) {
-          // Outside AOI or inside building base: show natural 3D terrain relief color
-          dtmColArr[idx * 3] = nat.r;
-          dtmColArr[idx * 3 + 1] = nat.g;
-          dtmColArr[idx * 3 + 2] = nat.b;
+          gridVisRgb[idx * 3] = nat.r;
+          gridVisRgb[idx * 3 + 1] = nat.g;
+          gridVisRgb[idx * 3 + 2] = nat.b;
           continue;
         }
 
@@ -1782,20 +2334,28 @@
         if (hits >= 1) groundLit += cellArea;
         else groundUnlitCount++;
 
-        const rgb = getVisColor(hits, sr, sg, sb, nat.r, nat.g, nat.b);
-        // Subtle 22% blend with natural elevation tone so hill relief always reads clearly
-        const mix = state.showVisColoring ? 0.82 : 0.0;
-        dtmColArr[idx * 3] = nat.r * (1 - mix) + rgb[0] * mix;
-        dtmColArr[idx * 3 + 1] = nat.g * (1 - mix) + rgb[1] * mix;
-        dtmColArr[idx * 3 + 2] = nat.b * (1 - mix) + rgb[2] * mix;
+        const rgb = getVisColor(hits, sr, sg, sb, nat.r, nat.g, nat.b, true);
+        gridVisRgb[idx * 3] = rgb[0];
+        gridVisRgb[idx * 3 + 1] = rgb[1];
+        gridVisRgb[idx * 3 + 2] = rgb[2];
       }
     }
     dtmColAttr.needsUpdate = true;
 
-    // 2. Evaluate Building Roofs & Walls
-    const bp = buildingPatches;
-    const bColArr = bp.colorAttr.array;
+    if (dtmLightOverlayMesh && ovVertexGridIdx.length > 0) {
+      const ovColAttr = dtmLightOverlayMesh.geometry.attributes.color;
+      const ovArr = ovColAttr.array;
+      for (let v = 0; v < ovVertexGridIdx.length; v++) {
+        const k = ovVertexGridIdx[v];
+        ovArr[v * 3] = gridVisRgb[k * 3];
+        ovArr[v * 3 + 1] = gridVisRgb[k * 3 + 1];
+        ovArr[v * 3 + 2] = gridVisRgb[k * 3 + 2];
+      }
+      ovColAttr.needsUpdate = true;
+    }
 
+    // 2. Evaluate Building Roofs & Walls (store raw visibility RGB for instant opacity sliding)
+    const bp = buildingPatches;
     for (let i = 0; i < bp.count; i++) {
       const area = bp.area[i];
       const isRoof = bp.isRoof[i] === 1;
@@ -1826,19 +2386,18 @@
         }
       }
 
-      const rgb = area === 0
-        ? [0.25, 0.30, 0.35]
-        : getVisColor(hits, sr, sg, sb, isRoof ? 0.72 : 0.54, isRoof ? 0.76 : 0.60, isRoof ? 0.82 : 0.68);
-
-      const vs = bp.vertStart[i] * 3;
-      const vc = bp.vertCount ? bp.vertCount[i] : 4;
-      for (let v = 0; v < vc; v++) {
-        bColArr[vs + v * 3] = rgb[0];
-        bColArr[vs + v * 3 + 1] = rgb[1];
-        bColArr[vs + v * 3 + 2] = rgb[2];
+      const baseR = isRoof ? 0.72 : 0.54;
+      const baseG = isRoof ? 0.76 : 0.60;
+      const baseB = isRoof ? 0.82 : 0.68;
+      const vRgb = area === 0 ? [0.25, 0.30, 0.35] : getVisColor(hits, sr, sg, sb, baseR, baseG, baseB, true);
+      if (bp.visR) {
+        bp.visR[i] = vRgb[0];
+        bp.visG[i] = vRgb[1];
+        bp.visB[i] = vRgb[2];
       }
     }
-    bp.colorAttr.needsUpdate = true;
+
+    applyLightOpacity();
 
     updateVerdictUI({
       groundTotal, groundLit, groundUnlitCount,
@@ -1926,6 +2485,13 @@
       }
     }
 
+    updateOpticalMetaUI();
+    document.getElementById("cam-count").textContent = `${s.activeCount}/${state.cameras.length}`;
+
+    updateLegend();
+  }
+
+  function updateOpticalMetaUI() {
     const { halfTanU, halfTanV } = getSensorHalfTans();
     const swathA = Math.round(2 * state.heightAgl * halfTanU);
     const swathC = Math.round(2 * state.heightAgl * halfTanV);
@@ -1935,15 +2501,15 @@
 
     document.getElementById("meta-gsd").textContent = `GSD ${gsd.toFixed(1)} cm`;
     document.getElementById("meta-fp").textContent = `${swathA} × ${swathC} m`;
-    document.getElementById("cam-count").textContent = `${s.activeCount}/${state.cameras.length}`;
-
-    updateLegend();
   }
 
   function updateLegend() {
     const el = document.getElementById("legend-row");
-    if (!state.showVisColoring) {
-      el.innerHTML = `<div class="legend-item"><span class="swatch" style="background:#496348"></span><span>Natural 3D Hill Relief (Visibility Coloring Off)</span></div>`;
+    if (!state.showVisColoring || state.lightOpacity <= 0.005) {
+      const lbl = !state.showBaseMapLayer || state.baseMapMode === "none"
+        ? "3D Hillshade Only"
+        : `Base Map (${state.baseMapMode.replace("_", " ").toUpperCase()})`;
+      el.innerHTML = `<div class="legend-item"><span class="swatch" style="background:#6d747e"></span><span>${lbl} (Light Off / 0% Opacity)</span></div>`;
       return;
     }
     if (state.colorMode === "pass_fail") {
@@ -1995,9 +2561,9 @@
       state.showVisColoring = true;
       state.showFootprints = true;
       state.showFrustums = true;
-      document.getElementById("chk-vis").checked = true;
       document.getElementById("chk-fp").checked = true;
       document.getElementById("chk-frustum").checked = true;
+      syncLayerControlsUI();
     } else if (state.showFootprints) {
       cam.showFootprint = true;
     }
@@ -2049,13 +2615,48 @@
           <span>${cam.id}</span>
           ${isSelected ? '<span class="cam-sel-tag">NEON</span>' : ""}
         </div>
-        <div class="cam-checks">
-          <label class="chk"><input type="checkbox" data-vis="${idx}" ${cam.active ? "checked" : ""} /><span>Light</span></label>
-          <label class="chk"><input type="checkbox" data-fp="${idx}" ${cam.showFootprint ? "checked" : ""} /><span>FP</span></label>
-        </div>
       `;
+
+      const checks = document.createElement("div");
+      checks.className = "cam-checks";
+
+      const btnLight = document.createElement("button");
+      btnLight.type = "button";
+      btnLight.className = `cam-pill ${cam.active ? "on-light" : "off"}`;
+      btnLight.dataset.vis = String(idx);
+      btnLight.title = "Click to toggle camera Light visibility";
+      btnLight.textContent = "Light";
+      btnLight.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const next = !state.cameras[idx].active;
+        state.cameras[idx].active = next;
+        if (next) state.cameras[idx].showFootprint = true;
+        state.selectedCamIndex = idx;
+        renderFlightSceneObjects();
+        renderCameraList(false);
+        evaluateVisibility();
+      });
+
+      const btnFp = document.createElement("button");
+      btnFp.type = "button";
+      btnFp.className = `cam-pill ${cam.showFootprint ? "on-fp" : "off"}`;
+      btnFp.dataset.fp = String(idx);
+      btnFp.title = "Click to toggle camera Footprint";
+      btnFp.textContent = "FP";
+      btnFp.addEventListener("click", (e) => {
+        e.stopPropagation();
+        state.cameras[idx].showFootprint = !state.cameras[idx].showFootprint;
+        state.selectedCamIndex = idx;
+        renderFlightSceneObjects();
+        renderCameraList(false);
+      });
+
+      checks.appendChild(btnLight);
+      checks.appendChild(btnFp);
+      item.appendChild(checks);
+
       item.addEventListener("click", (e) => {
-        if (e.target.tagName === "INPUT" || e.target.tagName === "LABEL") return;
+        if (e.target && (e.target.tagName === "BUTTON" || e.target.tagName === "INPUT" || e.target.tagName === "LABEL")) return;
         selectCamera(idx, false);
       });
       if (isSelected) selectedEl = item;
@@ -2065,28 +2666,6 @@
     if (scrollToSelected && selectedEl && typeof selectedEl.scrollIntoView === "function") {
       selectedEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
-
-    camGrid.querySelectorAll("[data-vis]").forEach((el) => {
-      el.addEventListener("change", (e) => {
-        const idx = Number(e.target.dataset.vis);
-        state.cameras[idx].active = e.target.checked;
-        if (e.target.checked) state.cameras[idx].showFootprint = true;
-        state.selectedCamIndex = idx;
-        renderFlightSceneObjects();
-        renderCameraList(false);
-        evaluateVisibility();
-      });
-    });
-
-    camGrid.querySelectorAll("[data-fp]").forEach((el) => {
-      el.addEventListener("change", (e) => {
-        const idx = Number(e.target.dataset.fp);
-        state.cameras[idx].showFootprint = e.target.checked;
-        state.selectedCamIndex = idx;
-        renderFlightSceneObjects();
-        renderCameraList(false);
-      });
-    });
   }
 
   // =========================================================================
@@ -2140,16 +2719,36 @@
   function setupViewportClicks() {
     const dom = renderer.domElement;
     let down = { x: 0, y: 0 };
-    dom.addEventListener("pointerdown", (e) => (down = { x: e.clientX, y: e.clientY }));
-    dom.addEventListener("pointerup", (e) => {
-      if (e.button !== 0 || panMode) return;
-      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+    let lastHoverTs = 0;
+
+    const mouseFromEvent = (e) => {
       const rect = dom.getBoundingClientRect();
-      const mouse = new THREE.Vector2(
+      return new THREE.Vector2(
         ((e.clientX - rect.left) / rect.width) * 2 - 1,
         -((e.clientY - rect.top) / rect.height) * 2 + 1
       );
-      raycaster.setFromCamera(mouse, camera);
+    };
+
+    dom.addEventListener("pointermove", (e) => {
+      const now = performance.now();
+      if (now - lastHoverTs < 30) return;
+      lastHoverTs = now;
+      if (!raycaster || !camera) return;
+      raycaster.setFromCamera(mouseFromEvent(e), camera);
+      const targets = [];
+      if (buildingsMesh && buildingsGroup && buildingsGroup.visible) targets.push(buildingsMesh);
+      if (dtmMesh) targets.push(dtmMesh);
+      const hits = raycaster.intersectObjects(targets, false);
+      if (hits.length > 0) {
+        const h = hits[0];
+        updateHoverCoordinateUI(h.point.x, h.point.y, h.point.z);
+      }
+    });
+
+    dom.addEventListener("pointerdown", (e) => (down = { x: e.clientX, y: e.clientY }));
+    dom.addEventListener("pointerup", (e) => {
+      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 5) return;
+      raycaster.setFromCamera(mouseFromEvent(e), camera);
 
       const camHits = raycaster.intersectObjects(cameraPickMeshes, false);
       if (camHits.length > 0) {
@@ -2157,9 +2756,13 @@
         return;
       }
 
-      const hits = raycaster.intersectObjects([buildingsMesh, dtmMesh].filter(Boolean), false);
+      const targets = [];
+      if (buildingsMesh && buildingsGroup && buildingsGroup.visible) targets.push(buildingsMesh);
+      if (dtmMesh) targets.push(dtmMesh);
+      const hits = raycaster.intersectObjects(targets, false);
       if (hits.length > 0) {
         const h = hits[0];
+        updateHoverCoordinateUI(h.point.x, h.point.y, h.point.z);
         if (h.object === buildingsMesh && h.faceIndex !== undefined) {
           const pIdx = buildingPatches.faceMeta[h.faceIndex];
           const n = new THREE.Vector3(buildingPatches.nx[pIdx], buildingPatches.ny[pIdx], buildingPatches.nz[pIdx]);
@@ -2195,6 +2798,40 @@
     visTimer = setTimeout(() => evaluateVisibility(), 35);
   }
 
+  function syncLayerControlsUI() {
+    const opPct = Math.round(state.lightOpacity * 100);
+    const s1 = document.getElementById("sl-light-opacity");
+    const v1 = document.getElementById("val-light-opacity");
+    const s2 = document.getElementById("sl-layer-light-op");
+    const v2 = document.getElementById("val-layer-light-op");
+    if (s1) s1.value = opPct;
+    if (v1) v1.textContent = `${opPct}%`;
+    if (s2) s2.value = opPct;
+    if (v2) v2.textContent = `${opPct}%`;
+
+    const c1 = document.getElementById("chk-vis");
+    const c2 = document.getElementById("chk-layer-light");
+    if (c1) c1.checked = state.showVisColoring;
+    if (c2) c2.checked = state.showVisColoring;
+
+    const cb = document.getElementById("chk-layer-bldgs");
+    const cc = document.getElementById("chk-layer-contours");
+    const cm = document.getElementById("chk-layer-basemap");
+    if (cb) cb.checked = state.showBldgsLayer;
+    if (cc) cc.checked = state.showContoursLayer;
+    if (cm) cm.checked = state.showBaseMapLayer;
+
+    const bs = document.getElementById("basemap-select");
+    if (bs) bs.value = state.baseMapMode;
+    const br = document.getElementById("basemap-res-select");
+    if (br) br.value = String(state.baseMapZoom);
+    document.querySelectorAll("#qms-list .qms-item").forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.qms === state.baseMapMode);
+    });
+    const cs = document.getElementById("crs-select");
+    if (cs) cs.value = state.crsMode;
+  }
+
   function syncSliders() {
     document.getElementById("sl-height").value = state.heightAgl;
     document.getElementById("val-height").textContent = `${Math.round(state.heightAgl)} m`;
@@ -2210,7 +2847,31 @@
     document.getElementById("val-line-dist").textContent = `${Math.round(state.lineSpacingM)} m`;
 
     document.getElementById("sl-focal").value = state.focalMm;
-    document.getElementById("val-focal").textContent = `${Math.round(state.focalMm)} mm`;
+    document.getElementById("val-focal").textContent = `${Number(state.focalMm.toFixed(1))} mm`;
+
+    const fovCross = getFovCrossDeg();
+    const fovAlong = getFovAlongDeg();
+    document.getElementById("sl-fov-cross").value = Math.max(20, Math.min(100, fovCross)).toFixed(1);
+    document.getElementById("val-fov-cross").textContent = `${fovCross.toFixed(1)}°`;
+    document.getElementById("sl-fov-along").value = Math.max(15, Math.min(90, fovAlong)).toFixed(1);
+    document.getElementById("val-fov-along").textContent = `${fovAlong.toFixed(1)}°`;
+
+    document.getElementById("sl-sensor-cross").value = state.sensorCrossMm.toFixed(2);
+    document.getElementById("val-sensor-cross").textContent = `${state.sensorCrossMm.toFixed(2)} mm`;
+    document.getElementById("sl-sensor-along").value = state.sensorAlongMm.toFixed(2);
+    document.getElementById("val-sensor-along").textContent = `${state.sensorAlongMm.toFixed(2)} mm`;
+
+    document.getElementById("sl-pixel-um").value = state.pixelUm.toFixed(2);
+    document.getElementById("val-pixel-um").textContent = `${state.pixelUm.toFixed(2)} µm`;
+
+    const pxC = Math.round((state.sensorCrossMm * 1000) / Math.max(0.5, state.pixelUm));
+    const pxA = Math.round((state.sensorAlongMm * 1000) / Math.max(0.5, state.pixelUm));
+    const pupilStr = state.pupilMm ? ` • Pupil ${state.pupilMm.toFixed(1)} mm` : "";
+    document.getElementById("cam-spec-summary").textContent =
+      `${pxC} × ${pxA} px • ${state.sensorCrossMm.toFixed(2)} × ${state.sensorAlongMm.toFixed(2)} mm • ${state.pixelUm.toFixed(2)} µm${pupilStr}`;
+
+    document.getElementById("cam-model-select").value = state.camModel;
+    syncLayerControlsUI();
 
     document.getElementById("sl-heading").value = state.headingDeg;
     document.getElementById("val-heading").textContent = `${Math.round(state.headingDeg)}°`;
@@ -2223,6 +2884,7 @@
 
     document.getElementById("sl-dtm-amp").value = state.dtmReliefAmp;
     document.getElementById("sl-bldg-h").value = state.bldgHeightScale;
+    updateOpticalMetaUI();
   }
 
   function recomputeSpacingFromOverlap() {
@@ -2247,6 +2909,7 @@
     renderCameraList(false);
     evaluateVisibility();
     updateDataStatusUI();
+    updateHoverCoordinateUI(0, dtmGrid.meanZ, 0);
     if (resetViewTarget && controls) {
       controls.target.set(0, dtmGrid.meanZ + 40, 0);
       camera.position.set(1450, dtmGrid.meanZ + 1150, 1650);
@@ -2273,6 +2936,7 @@
     document.getElementById("shp-sublot-wrap").style.display = "none";
 
     Object.assign(state, p);
+    refreshCameraModelTag();
     const subData = getActiveSublotData();
     state.originEpsg3857 = [...(subData.originEpsg3857 || DATA.originEpsg3857)];
     const [lat0, lon0] = subData.centerLatLon || DATA.centerLatLon || [7.75114, 80.00201];
@@ -3020,6 +3684,67 @@
     document.getElementById("preset-select").addEventListener("change", (e) => applyPreset(e.target.value));
     document.getElementById("btn-reset").addEventListener("click", () => applyPreset(state.presetKey));
 
+    const setBaseMapMode = (mode, allowUploadPrompt = false) => {
+      state.baseMapMode = mode;
+      if (mode !== "none") state.showBaseMapLayer = true;
+      if (allowUploadPrompt && mode === "custom" && !state.customBaseMapImg) {
+        const inp = document.getElementById("file-basemap");
+        if (inp) { inp.value = ""; inp.click(); }
+      }
+      syncLayerControlsUI();
+      updateBaseMapTexture(true);
+      applyLightOpacity();
+    };
+
+    document.getElementById("basemap-select").addEventListener("change", (e) => {
+      setBaseMapMode(e.target.value, true);
+    });
+
+    const baseResSel = document.getElementById("basemap-res-select");
+    if (baseResSel) {
+      baseResSel.addEventListener("change", (e) => {
+        state.baseMapZoom = Number(e.target.value) || 17;
+        if (state.baseMapMode !== "none" && state.showBaseMapLayer) {
+          updateBaseMapTexture(true);
+        }
+        syncLayerControlsUI();
+      });
+    }
+
+    document.querySelectorAll("#qms-list .qms-item").forEach((btn) => {
+      btn.addEventListener("click", () => setBaseMapMode(btn.dataset.qms, false));
+    });
+
+    document.getElementById("btn-qms-upload").addEventListener("click", () => {
+      const inp = document.getElementById("file-basemap");
+      if (inp) { inp.value = ""; inp.click(); }
+    });
+
+    document.getElementById("chk-layer-basemap").addEventListener("change", (e) => {
+      state.showBaseMapLayer = e.target.checked;
+      syncLayerControlsUI();
+      updateBaseMapTexture(false);
+      applyLightOpacity();
+    });
+
+    document.getElementById("chk-layer-bldgs").addEventListener("change", (e) => {
+      state.showBldgsLayer = e.target.checked;
+      if (buildingsGroup) buildingsGroup.visible = state.showBldgsLayer;
+      syncLayerControlsUI();
+    });
+
+    document.getElementById("chk-layer-contours").addEventListener("change", (e) => {
+      state.showContoursLayer = e.target.checked;
+      if (dtmContourLines) dtmContourLines.visible = state.showContoursLayer;
+      syncLayerControlsUI();
+    });
+
+    document.getElementById("crs-select").addEventListener("change", (e) => {
+      state.crsMode = e.target.value;
+      const [hx, hy, hz] = state.lastHoverWorldXZ || [0, dtmGrid.meanZ, 0];
+      updateHoverCoordinateUI(hx, hy, hz);
+    });
+
     // Real Data & Uploads
     const bindFileBtn = (btnId, inputId, handler) => {
       const btn = document.getElementById(btnId);
@@ -3034,6 +3759,21 @@
         }
       });
     };
+
+    bindFileBtn("btn-up-basemap", "file-basemap", async (files) => {
+      const file = files[0];
+      if (!file) return;
+      const img = await new Promise((resolve, reject) => {
+        const url = URL.createObjectURL(file);
+        const im = new Image();
+        im.onload = () => { URL.revokeObjectURL(url); resolve(im); };
+        im.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Could not load map image.")); };
+        im.src = url;
+      });
+      img._uid = `${file.name}:${file.size}:${Date.now()}`;
+      state.customBaseMapImg = img;
+      setBaseMapMode("custom", false);
+    });
 
     bindFileBtn("btn-up-dtm", "file-dtm", (files) => loadTerrainUpload(files[0], false));
     bindFileBtn("btn-up-dsm", "file-dsm", (files) => loadTerrainUpload(files[0], true));
@@ -3101,14 +3841,6 @@
       controls.target.copy(intersectRayWithDtm(cam.O.x, cam.O.y, cam.O.z, cam.w.x, cam.w.y, cam.w.z));
       controls.update();
     });
-    const panButton = document.getElementById("btn-pan");
-    panButton.addEventListener("click", () => {
-      panMode = !panMode;
-      controls.mouseButtons.LEFT = panMode ? THREE.MOUSE.PAN : THREE.MOUSE.ROTATE;
-      panButton.classList.toggle("active", panMode);
-      panButton.setAttribute("aria-pressed", String(panMode));
-      panButton.title = panMode ? "Use left-drag to pan; click again to orbit" : "Use left-drag to pan the view";
-    });
 
     // Flight Sliders
     document.getElementById("chk-lock-spacing").addEventListener("change", (e) => {
@@ -3148,12 +3880,65 @@
       state.headingDeg = Number(e.target.value);
       onFlightChange(false);
     });
-    document.getElementById("sl-focal").addEventListener("input", (e) => {
-      state.focalMm = Number(e.target.value);
+    const applyOpticsUpdate = () => {
       state.nominalGsdCm = null;
+      refreshCameraModelTag();
       if (state.lockSpacing || state.useExactShapefile) recomputeOverlapFromSpacing();
       else recomputeSpacingFromOverlap();
       onFlightChange(state.useExactShapefile);
+    };
+
+    document.getElementById("cam-model-select").addEventListener("change", (e) => {
+      const m = CAMERA_MODELS[e.target.value];
+      if (m) {
+        state.camModel = e.target.value;
+        state.focalMm = m.focalMm;
+        state.sensorCrossMm = m.sensorCrossMm;
+        state.sensorAlongMm = m.sensorAlongMm;
+        state.pixelUm = m.pixelUm;
+        state.pupilMm = m.pupilMm;
+        applyOpticsUpdate();
+      } else {
+        state.camModel = "custom";
+        syncSliders();
+      }
+    });
+
+    document.getElementById("btn-swap-sensor").addEventListener("click", () => {
+      const tmp = state.sensorCrossMm;
+      state.sensorCrossMm = state.sensorAlongMm;
+      state.sensorAlongMm = tmp;
+      applyOpticsUpdate();
+    });
+
+    document.getElementById("sl-focal").addEventListener("input", (e) => {
+      state.focalMm = Number(e.target.value);
+      applyOpticsUpdate();
+    });
+    document.getElementById("sl-fov-cross").addEventListener("input", (e) => {
+      const fovRad = degToRad(Number(e.target.value));
+      state.sensorCrossMm = 2 * state.focalMm * Math.tan(fovRad * 0.5);
+      applyOpticsUpdate();
+    });
+    document.getElementById("sl-fov-along").addEventListener("input", (e) => {
+      const fovRad = degToRad(Number(e.target.value));
+      state.sensorAlongMm = 2 * state.focalMm * Math.tan(fovRad * 0.5);
+      applyOpticsUpdate();
+    });
+    document.getElementById("sl-sensor-cross").addEventListener("input", (e) => {
+      state.sensorCrossMm = Number(e.target.value);
+      applyOpticsUpdate();
+    });
+    document.getElementById("sl-sensor-along").addEventListener("input", (e) => {
+      state.sensorAlongMm = Number(e.target.value);
+      applyOpticsUpdate();
+    });
+    document.getElementById("sl-pixel-um").addEventListener("input", (e) => {
+      state.pixelUm = Number(e.target.value);
+      state.nominalGsdCm = null;
+      refreshCameraModelTag();
+      syncSliders();
+      scheduleRecompute();
     });
     document.getElementById("sl-omega").addEventListener("input", (e) => {
       state.omega = Number(e.target.value);
@@ -3182,11 +3967,36 @@
       scheduleRecompute();
     });
 
-    // Visibility Toggles
-    document.getElementById("chk-vis").addEventListener("change", (e) => {
-      state.showVisColoring = e.target.checked;
-      evaluateVisibility();
-    });
+    // Visibility Toggles & Light Transparency Sliders
+    const setShowLight = (flag) => {
+      state.showVisColoring = !!flag;
+      syncLayerControlsUI();
+      applyLightOpacity();
+    };
+    const setLightOpacityPct = (pct) => {
+      state.lightOpacity = Math.max(0, Math.min(1, Number(pct) / 100));
+      syncLayerControlsUI();
+      applyLightOpacity();
+    };
+
+    document.getElementById("chk-vis").addEventListener("change", (e) => setShowLight(e.target.checked));
+    document.getElementById("chk-layer-light").addEventListener("change", (e) => setShowLight(e.target.checked));
+    document.getElementById("sl-layer-light-op").addEventListener("input", (e) => setLightOpacityPct(e.target.value));
+
+    const bindPanelToggle = (btnId, panelId) => {
+      const btn = document.getElementById(btnId);
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        const panel = document.getElementById(panelId);
+        if (!panel) return;
+        const isMin = panel.classList.toggle("minimized");
+        btn.textContent = isMin ? "+" : "−";
+      });
+    };
+    bindPanelToggle("btn-toggle-layers", "panel-layers");
+    bindPanelToggle("btn-toggle-input", "panel-input");
+    setupEditableSliderValues();
+
     document.getElementById("chk-fp").addEventListener("change", (e) => {
       state.showFootprints = e.target.checked;
       renderFlightSceneObjects();
@@ -3202,9 +4012,9 @@
       state.showVisColoring = true;
       state.showFootprints = true;
       state.showFrustums = true;
-      document.getElementById("chk-vis").checked = true;
       document.getElementById("chk-fp").checked = true;
       document.getElementById("chk-frustum").checked = true;
+      syncLayerControlsUI();
       renderFlightSceneObjects(); renderCameraList(false); evaluateVisibility();
     });
     document.getElementById("btn-all-off").addEventListener("click", () => {
@@ -3224,14 +4034,109 @@
       state.showVisColoring = true;
       state.showFootprints = true;
       state.showFrustums = true;
-      document.getElementById("chk-vis").checked = true;
       document.getElementById("chk-fp").checked = true;
       document.getElementById("chk-frustum").checked = true;
+      syncLayerControlsUI();
       renderFlightSceneObjects(); renderCameraList(true); evaluateVisibility();
     };
     document.getElementById("btn-prev").addEventListener("click", () => walk(-1));
     document.getElementById("btn-next").addEventListener("click", () => walk(+1));
     document.getElementById("btn-clear-ray").addEventListener("click", clearInspectedRays);
+  }
+
+  const EDITABLE_SLIDER_MAP = {
+    "val-height": "sl-height",
+    "val-forelap": "sl-forelap",
+    "val-sidelap": "sl-sidelap",
+    "val-line-dist": "sl-line-dist",
+    "val-focal": "sl-focal",
+    "val-heading": "sl-heading",
+    "val-fov-cross": "sl-fov-cross",
+    "val-fov-along": "sl-fov-along",
+    "val-sensor-cross": "sl-sensor-cross",
+    "val-sensor-along": "sl-sensor-along",
+    "val-pixel-um": "sl-pixel-um",
+    "val-omega": "sl-omega",
+    "val-phi": "sl-phi",
+    "val-dtm-amp": "sl-dtm-amp",
+    "val-bldg-h": "sl-bldg-h",
+    "val-layer-light-op": "sl-layer-light-op",
+  };
+
+  function setSliderValueByValId(valId, numVal) {
+    const sliderId = EDITABLE_SLIDER_MAP[valId];
+    if (!sliderId || !Number.isFinite(numVal)) return false;
+    const slider = document.getElementById(sliderId);
+    if (!slider) return false;
+
+    const minV = Number(slider.min);
+    const maxV = Number(slider.max);
+    if (Number.isFinite(minV) && numVal < minV) slider.min = String(numVal);
+    if (Number.isFinite(maxV) && numVal > maxV) slider.max = String(numVal);
+    const st = Number(slider.step);
+    const base = Number.isFinite(minV) ? minV : 0;
+    if (Number.isFinite(st) && st > 0 && Math.abs(((numVal - base) / st) % 1) > 1e-4) {
+      slider.step = "any";
+    }
+
+    slider.value = String(numVal);
+    if (typeof Event === "function" && typeof slider.dispatchEvent === "function") {
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+    } else if (typeof slider.trigger === "function") {
+      slider.trigger("input");
+    }
+    return true;
+  }
+
+  function setupEditableSliderValues() {
+    Object.keys(EDITABLE_SLIDER_MAP).forEach((valId) => {
+      const valEl = document.getElementById(valId);
+      const sliderId = EDITABLE_SLIDER_MAP[valId];
+      const slider = document.getElementById(sliderId);
+      if (!valEl || !slider) return;
+      valEl.title = "Click to type exact value";
+
+      valEl.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        if (valEl.style.display === "none") return;
+
+        const curNum = parseFloat(slider.value);
+        const inp = document.createElement("input");
+        inp.type = "number";
+        inp.step = "any";
+        inp.className = "inline-num-input";
+        inp.value = Number.isFinite(curNum) ? String(curNum) : "";
+
+        const parent = valEl.parentNode;
+        valEl.style.display = "none";
+        if (parent) parent.insertBefore(inp, valEl.nextSibling || null);
+        if (typeof inp.focus === "function") inp.focus();
+        if (typeof inp.select === "function") inp.select();
+
+        let finished = false;
+        const finish = (apply) => {
+          if (finished) return;
+          finished = true;
+          const parsed = parseFloat(inp.value);
+          if (inp.parentNode) inp.parentNode.removeChild(inp);
+          valEl.style.display = "";
+          if (apply && Number.isFinite(parsed)) {
+            setSliderValueByValId(valId, parsed);
+          }
+        };
+
+        inp.addEventListener("keydown", (ke) => {
+          if (ke.key === "Enter") {
+            ke.preventDefault();
+            finish(true);
+          } else if (ke.key === "Escape") {
+            ke.preventDefault();
+            finish(false);
+          }
+        });
+        inp.addEventListener("blur", () => finish(true));
+      });
+    });
   }
 
   function onWindowResize() {
@@ -3256,8 +4161,17 @@
 
   window.__TRUE_ORTHO_API__ = {
     state,
+    CAMERA_MODELS,
     applyAoi,
     applyPreset,
+    updateBaseMapTexture,
+    evaluateVisibility,
+    applyLightOpacity,
+    updateHoverCoordinateUI,
+    setSliderValueByValId,
+    getFovCrossDeg,
+    getFovAlongDeg,
+    getSceneInspect: () => ({ dtmMesh, dtmLightOverlayMesh, dtmContourLines, buildingsGroup, baseMapTexture, baseMapCanvas }),
     loadTerrainUpload,
     loadBuildingsUpload,
     loadFlightUpload,

@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SC01 True Ortho 3D — Hilly DTM &amp; Flight Justification</title>
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="styles.css?v=10" />
 </head>
 <body>
   <div class="viewport">
@@ -15,7 +15,7 @@
       <div class="panel-header">
         <div>
           <div class="app-title">True Ortho 3D Simulator</div>
-          <div class="app-sub">Sri Lanka Lot 01 &bull; Phase One iXM-150 RGB (40mm)</div>
+          <div class="app-sub">Sri Lanka Lot 01 &bull; Phase One iXM-RS150F (40mm / 50mm)</div>
         </div>
         <div style="display:flex; gap:4px;">
           <button class="btn sm" id="btn-theme" title="Switch White / Dark Theme">Dark</button>
@@ -23,65 +23,89 @@
         </div>
       </div>
 
-      <!-- AOI Area & Flight Preset -->
-      <div class="card">
-        <div class="card-title"><span>AOI Area &amp; Flight Plan</span></div>
-        <select id="aoi-select" title="Select Sri Lanka AOI Region (GEM15 DSM + OSM Buildings or Built-in Sublots)">
-          <option value="poly1">AOI 1: L1 Lower-Right (GEM15 DSM 1 + 345 OSM Bldgs)</option>
-          <option value="poly2">AOI 2: L1 Upper-Left (GEM15 DSM 2 + 420 OSM Bldgs)</option>
-          <option value="01I">Demo: Sublot 01I Hilly + High-Rise Skyline</option>
-          <option value="01C">Demo: Sublot 01C Mountain (209-816m)</option>
-        </select>
-
-        <div class="seg-group" id="surface-mode-seg" title="Switch bare-earth DTM vs Raw GEM15 DSM terrain surface">
-          <button class="seg-btn active" data-smode="dtm">DTM + 3D OSM</button>
-          <button class="seg-btn" data-smode="dsm">Raw GEM15 DSM</button>
-        </div>
-
-        <select id="preset-select">
-          <option value="lot01_actual">1. Actual Lot 01 Flight Plan (SHP Cameras)</option>
-          <option value="sintegra_top">2. Sintegra Priority TOP (1500m, 80/60%)</option>
-          <option value="sintegra_40">3. Reduced Sidelap (1500m, 80/40%)</option>
-          <option value="cloud_750_unadj">4. Low-Alt 750m (Unadjusted Spacing)</option>
-          <option value="cloud_750_adj">5. Low-Alt 750m (Adjusted 80/60%)</option>
-          <option value="steep_hills">6. Tall Urban / Steep Stress Test</option>
-        </select>
-      </div>
-
-      <!-- Real Data & Uploads -->
-      <div class="card">
+      <!-- Minimizable INPUT Panel (AOI Area, Flight Plan, Real Data & Uploads) -->
+      <div class="card input-panel-group" id="panel-input">
         <div class="card-title">
-          <span>Real Data &amp; Uploads</span>
-          <button class="btn sm" id="btn-clear-uploads" title="Revert uploaded terrain, buildings & flight plan back to preset">Clear</button>
+          <span>Input (AOI, Flight &amp; Uploads)</span>
+          <button type="button" class="btn sm" id="btn-toggle-input" style="padding:1px 6px;" title="Minimize / Expand Input Panel">&minus;</button>
         </div>
 
-        <div class="upload-grid">
-          <button class="btn sm btn-full" id="btn-up-dtm" title="Upload DTM (.tif, .asc, .xyz, .csv)">Upload DTM</button>
-          <button class="btn sm btn-full" id="btn-up-dsm" title="Upload DSM (.tif, .asc, .xyz) — derives building heights via DSM-DTM">Upload DSM</button>
-        </div>
-        <input type="file" id="file-dtm" accept=".tif,.tiff,.asc,.txt,.xyz,.csv" style="display:none;" />
-        <input type="file" id="file-dsm" accept=".tif,.tiff,.asc,.txt,.xyz,.csv" style="display:none;" />
+        <div id="input-panel-body" class="input-panel-body">
+          <!-- AOI Area & Flight Preset -->
+          <div class="card">
+            <div class="card-title"><span>AOI Area &amp; Flight Plan</span></div>
+            <select id="aoi-select" title="Select Sri Lanka AOI Region (GEM15 DSM + OSM Buildings or Built-in Sublots)">
+              <option value="poly1">AOI 1: L1 Lower-Right (GEM15 DSM 1 + 345 OSM Bldgs)</option>
+              <option value="poly2">AOI 2: L1 Upper-Left (GEM15 DSM 2 + 420 OSM Bldgs)</option>
+              <option value="01I">Demo: Sublot 01I Hilly + High-Rise Skyline</option>
+              <option value="01C">Demo: Sublot 01C Mountain (209-816m)</option>
+            </select>
 
-        <div class="osm-row">
-          <input type="text" id="osm-latlon" class="text-input" value="7.75114, 80.00201" title="Center Lat, Lon for OSM Building Footprint fetch" />
-          <button class="btn sm btn-accent" id="btn-fetch-osm" title="Fetch real OpenStreetMap building footprints around Lat, Lon">Fetch OSM</button>
-        </div>
+            <div class="seg-group" id="surface-mode-seg" title="Switch bare-earth DTM vs Raw GEM15 DSM terrain surface">
+              <button class="seg-btn active" data-smode="dtm">DTM + 3D OSM</button>
+              <button class="seg-btn" data-smode="dsm">Raw GEM15 DSM</button>
+            </div>
 
-        <div class="upload-grid">
-          <button class="btn sm btn-full" id="btn-up-bldgs" title="Upload Buildings (.geojson, .shp + .dbf, .csv)">Upload Buildings</button>
-          <button class="btn sm btn-full" id="btn-up-flight" title="Upload Flight Plan (.shp + .dbf, .csv EO, .geojson, .kml)">Upload Flight</button>
-        </div>
-        <input type="file" id="file-bldgs" multiple accept=".geojson,.json,.shp,.dbf,.csv,.txt" style="display:none;" />
-        <input type="file" id="file-flight" multiple accept=".shp,.dbf,.csv,.txt,.geojson,.json,.kml" style="display:none;" />
+            <div class="osm-row" title="Wrap a Satellite, OSM, Topo, or Custom Base Map on top of the 3D DSM/DTM">
+              <select id="basemap-select" style="flex:1;">
+                <option value="google_sat">Base Map: Google Satellite</option>
+                <option value="google_hybrid">Base Map: Google Hybrid (Sat + Labels)</option>
+                <option value="satellite">Base Map: Esri World Imagery</option>
+                <option value="osm">Base Map: OpenStreetMap Streets</option>
+                <option value="topo">Base Map: Esri World Topo</option>
+                <option value="none">Base Map: None (Elevation Tint)</option>
+                <option value="custom">Base Map: Custom Map Image</option>
+              </select>
+              <button class="btn sm" id="btn-up-basemap" title="Upload custom ortho or map image (.jpg, .png, .webp) to wrap on DSM">Upload Map</button>
+            </div>
+            <input type="file" id="file-basemap" accept=".jpg,.jpeg,.png,.webp" style="display:none;" />
 
-        <div id="shp-sublot-wrap" style="display:none;">
-          <select id="shp-sublot-select" title="Select AOI sublot from uploaded multi-AOI shapefile"></select>
-        </div>
+            <select id="preset-select">
+              <option value="lot01_actual">1. Actual Lot 01 Flight Plan (SHP Cameras)</option>
+              <option value="sintegra_top">2. Sintegra Priority TOP (1500m, 80/60%)</option>
+              <option value="sintegra_40">3. Reduced Sidelap (1500m, 80/40%)</option>
+              <option value="cloud_750_unadj">4. Low-Alt 750m (Unadjusted Spacing)</option>
+              <option value="cloud_750_adj">5. Low-Alt 750m (Adjusted 80/60%)</option>
+              <option value="steep_hills">6. Tall Urban / Steep Stress Test</option>
+            </select>
+          </div>
 
-        <div class="status-box" id="data-status">
-          <div><strong>DTM:</strong> Built-in Sublot 01I Hilly</div>
-          <div><strong>Buildings:</strong> 30 Built-in Towers &amp; Blocks</div>
-          <div><strong>Flight:</strong> Lot 01 Sublot 01I (28 cams)</div>
+          <!-- Real Data & Uploads -->
+          <div class="card">
+            <div class="card-title">
+              <span>Real Data &amp; Uploads</span>
+              <button class="btn sm" id="btn-clear-uploads" title="Revert uploaded terrain, buildings & flight plan back to preset">Clear</button>
+            </div>
+
+            <div class="upload-grid">
+              <button class="btn sm btn-full" id="btn-up-dtm" title="Upload DTM (.tif, .asc, .xyz, .csv)">Upload DTM</button>
+              <button class="btn sm btn-full" id="btn-up-dsm" title="Upload DSM (.tif, .asc, .xyz) — derives building heights via DSM-DTM">Upload DSM</button>
+            </div>
+            <input type="file" id="file-dtm" accept=".tif,.tiff,.asc,.txt,.xyz,.csv" style="display:none;" />
+            <input type="file" id="file-dsm" accept=".tif,.tiff,.asc,.txt,.xyz,.csv" style="display:none;" />
+
+            <div class="osm-row">
+              <input type="text" id="osm-latlon" class="text-input" value="7.75114, 80.00201" title="Center Lat, Lon for OSM Building Footprint fetch" />
+              <button class="btn sm btn-accent" id="btn-fetch-osm" title="Fetch real OpenStreetMap building footprints around Lat, Lon">Fetch OSM</button>
+            </div>
+
+            <div class="upload-grid">
+              <button class="btn sm btn-full" id="btn-up-bldgs" title="Upload Buildings (.geojson, .shp + .dbf, .csv)">Upload Buildings</button>
+              <button class="btn sm btn-full" id="btn-up-flight" title="Upload Flight Plan (.shp + .dbf, .csv EO, .geojson, .kml)">Upload Flight</button>
+            </div>
+            <input type="file" id="file-bldgs" multiple accept=".geojson,.json,.shp,.dbf,.csv,.txt" style="display:none;" />
+            <input type="file" id="file-flight" multiple accept=".shp,.dbf,.csv,.txt,.geojson,.json,.kml" style="display:none;" />
+
+            <div id="shp-sublot-wrap" style="display:none;">
+              <select id="shp-sublot-select" title="Select AOI sublot from uploaded multi-AOI shapefile"></select>
+            </div>
+
+            <div class="status-box" id="data-status">
+              <div><strong>DTM:</strong> Built-in Sublot 01I Hilly</div>
+              <div><strong>Buildings:</strong> 30 Built-in Towers &amp; Blocks</div>
+              <div><strong>Flight:</strong> Lot 01 Sublot 01I (28 cams)</div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -125,8 +149,21 @@
       <!-- Flight & Terrain Parameters -->
       <div class="card">
         <div class="card-title">
-          <span>Flight &amp; Terrain &bull; iXM-150 (40mm)</span>
+          <span>Camera (iXM-RS150F) &amp; Flight Controls</span>
           <span id="meta-fp" style="font-family:var(--mono); color:var(--muted);">-- &times; --m</span>
+        </div>
+
+        <div class="osm-row" title="Select Phase One iXM-RS150F lens preset or switch to Custom optics">
+          <select id="cam-model-select" style="flex:1;">
+            <option value="ixm_rs150f_40">Phase One iXM-RS150F &bull; 40mm (FOV 67.5&deg; &times; 53.2&deg;)</option>
+            <option value="ixm_rs150f_50">Phase One iXM-RS150F &bull; 50mm (FOV 56.2&deg; &times; 43.7&deg;)</option>
+            <option value="custom">Custom Camera / Sensor / FOV</option>
+          </select>
+          <button class="btn sm" id="btn-swap-sensor" title="Swap Long / Short sensor orientation (90° rotation)">Swap 90&deg;</button>
+        </div>
+
+        <div id="cam-spec-summary" style="font-family:var(--mono); font-size:10px; color:var(--dim); line-height:1.35;">
+          14204 &times; 10652 px &bull; 53.41 &times; 40.05 mm &bull; 3.76 &micro;m &bull; Pupil 94.1 mm
         </div>
 
         <div class="slider-item">
@@ -134,7 +171,7 @@
             <span>Camera Height (AGL)</span>
             <span class="slider-num" id="val-height">1700 m</span>
           </div>
-          <input type="range" id="sl-height" min="400" max="2400" step="20" value="1700" />
+          <input type="range" id="sl-height" min="400" max="2400" step="1" value="1700" />
         </div>
 
         <label class="chk">
@@ -163,7 +200,7 @@
             <span>Flight Line Distance</span>
             <span class="slider-num" id="val-line-dist">921 m</span>
           </div>
-          <input type="range" id="sl-line-dist" min="180" max="1600" step="10" value="921" />
+          <input type="range" id="sl-line-dist" min="180" max="1600" step="1" value="921" />
         </div>
 
         <div class="two-col">
@@ -172,15 +209,57 @@
               <span>Focal Length</span>
               <span class="slider-num" id="val-focal">40 mm</span>
             </div>
-            <input type="range" id="sl-focal" min="24" max="95" step="1" value="40" />
+            <input type="range" id="sl-focal" min="20" max="120" step="0.5" value="40" />
           </div>
           <div class="slider-item">
             <div class="slider-head">
               <span>Heading</span>
               <span class="slider-num" id="val-heading">90&deg;</span>
             </div>
-            <input type="range" id="sl-heading" min="0" max="180" step="15" value="90" />
+            <input type="range" id="sl-heading" min="0" max="180" step="1" value="90" />
           </div>
+        </div>
+
+        <div class="two-col">
+          <div class="slider-item">
+            <div class="slider-head">
+              <span>FOV Long / Cross</span>
+              <span class="slider-num" id="val-fov-cross">67.5&deg;</span>
+            </div>
+            <input type="range" id="sl-fov-cross" min="20" max="100" step="0.1" value="67.5" />
+          </div>
+          <div class="slider-item">
+            <div class="slider-head">
+              <span>FOV Short / Along</span>
+              <span class="slider-num" id="val-fov-along">53.2&deg;</span>
+            </div>
+            <input type="range" id="sl-fov-along" min="15" max="90" step="0.1" value="53.2" />
+          </div>
+        </div>
+
+        <div class="two-col">
+          <div class="slider-item">
+            <div class="slider-head">
+              <span>Sensor Cross</span>
+              <span class="slider-num" id="val-sensor-cross">53.41 mm</span>
+            </div>
+            <input type="range" id="sl-sensor-cross" min="20" max="80" step="0.05" value="53.41" />
+          </div>
+          <div class="slider-item">
+            <div class="slider-head">
+              <span>Sensor Along</span>
+              <span class="slider-num" id="val-sensor-along">40.05 mm</span>
+            </div>
+            <input type="range" id="sl-sensor-along" min="15" max="70" step="0.05" value="40.05" />
+          </div>
+        </div>
+
+        <div class="slider-item">
+          <div class="slider-head">
+            <span>Pixel Pitch (&micro;m)</span>
+            <span class="slider-num" id="val-pixel-um">3.76 &micro;m</span>
+          </div>
+          <input type="range" id="sl-pixel-um" min="1.5" max="9.0" step="0.02" value="3.76" />
         </div>
 
         <div class="two-col">
@@ -233,10 +312,10 @@
           <button class="seg-btn" data-cmode="per_camera">Camera Color</button>
         </div>
 
-        <div style="display:flex; gap:10px; flex-wrap:wrap;">
-          <label class="chk"><input type="checkbox" id="chk-vis" checked /><span>Light</span></label>
-          <label class="chk"><input type="checkbox" id="chk-fp" checked /><span>Footprints</span></label>
-          <label class="chk"><input type="checkbox" id="chk-frustum" checked /><span>Pose Cones</span></label>
+        <div class="toggle-chip-row">
+          <label class="toggle-chip chip-light"><input type="checkbox" id="chk-vis" checked /><span>Light</span></label>
+          <label class="toggle-chip chip-fp"><input type="checkbox" id="chk-fp" checked /><span>Footprints</span></label>
+          <label class="toggle-chip chip-cone"><input type="checkbox" id="chk-frustum" checked /><span>Pose Cones</span></label>
         </div>
 
         <div class="btn-row">
@@ -256,16 +335,79 @@
       </div>
     </aside>
 
+    <!-- LAYERS & QUICKMAPSERVICES PANEL (left of panel-right) -->
+    <aside class="panel panel-layers" id="panel-layers">
+      <div class="card-title">
+        <span>Layers (GIS)</span>
+        <div style="display:flex; align-items:center; gap:5px;">
+          <span style="font-size:9.5px; color:var(--dim);">DSM Stack</span>
+          <button type="button" class="btn sm" id="btn-toggle-layers" style="padding:1px 6px;" title="Minimize / Expand Layers Panel">&minus;</button>
+        </div>
+      </div>
+
+      <div id="layers-body" class="layers-body">
+        <div class="layer-list">
+          <label class="chk">
+            <input type="checkbox" id="chk-layer-light" checked />
+            <span>Visibility Light (Red / Green)</span>
+          </label>
+          <div class="slider-item" style="padding-left:18px;">
+            <div class="slider-head">
+              <span>Light Opacity</span>
+              <span class="slider-num" id="val-layer-light-op">70%</span>
+            </div>
+            <input type="range" id="sl-layer-light-op" min="0" max="100" step="1" value="70" />
+          </div>
+
+          <label class="chk">
+            <input type="checkbox" id="chk-layer-bldgs" checked />
+            <span>3D Buildings (OSM / nDSM)</span>
+          </label>
+          <label class="chk">
+            <input type="checkbox" id="chk-layer-contours" checked />
+            <span>Contour Lines (25m)</span>
+          </label>
+          <label class="chk">
+            <input type="checkbox" id="chk-layer-basemap" checked />
+            <span>Base Map on DSM</span>
+          </label>
+        </div>
+
+        <div class="card-title" style="margin-top:2px;">
+          <span>QuickMapServices</span>
+          <div style="display:flex; align-items:center; gap:5px;">
+            <span id="qms-status" style="font-family:var(--mono); font-size:9px; color:var(--dim);">z17</span>
+            <button class="btn sm" id="btn-qms-upload" style="padding:1px 6px;" title="Upload custom map raster (.jpg, .png, .webp)">Map File</button>
+          </div>
+        </div>
+
+        <select id="basemap-res-select" title="Select satellite / base map tile zoom & texture resolution">
+          <option value="18">Resolution: Ultra HD (z18 &bull; 0.6 m/px)</option>
+          <option value="17" selected>Resolution: High HD (z17 &bull; 1.2 m/px)</option>
+          <option value="16">Resolution: Medium (z16 &bull; 2.4 m/px)</option>
+          <option value="15">Resolution: Fast (z15 &bull; 4.8 m/px)</option>
+        </select>
+
+        <div class="qms-list" id="qms-list">
+          <button type="button" class="qms-item active" data-qms="google_sat"><span class="qms-dot"></span><span>Google Satellite</span></button>
+          <button type="button" class="qms-item" data-qms="google_hybrid"><span class="qms-dot"></span><span>Google Hybrid</span></button>
+          <button type="button" class="qms-item" data-qms="satellite"><span class="qms-dot"></span><span>Esri World Imagery</span></button>
+          <button type="button" class="qms-item" data-qms="osm"><span class="qms-dot"></span><span>OSM Standard</span></button>
+          <button type="button" class="qms-item" data-qms="topo"><span class="qms-dot"></span><span>Esri World Topo</span></button>
+          <button type="button" class="qms-item" data-qms="none"><span class="qms-dot"></span><span>DSM Hillshade Only</span></button>
+        </div>
+      </div>
+    </aside>
+
     <!-- TOP-CENTER FLOATING VIEW BAR -->
     <div class="view-bar">
       <button class="btn sm" id="btn-view-3d">3D Hills</button>
       <button class="btn sm" id="btn-view-top">Top View</button>
       <button class="btn sm" id="btn-view-valley">Valley Close-Up</button>
       <button class="btn sm" id="btn-view-cam">Camera POV</button>
-      <button class="btn sm" id="btn-pan" type="button" aria-pressed="false" title="Use left-drag to pan the view">Pan</button>
     </div>
 
-    <!-- BOTTOM-CENTER LEGEND & CLICK RAY INFO -->
+    <!-- BOTTOM-CENTER LEGEND, RAY INFO & LIVE COORDINATE / CRS BAR -->
     <div class="hud-bottom-center">
       <div class="floating-pill" id="ray-pill" style="display:none; max-width:440px;">
         <div style="display:flex; justify-content:space-between; gap:10px; margin-bottom:3px;">
@@ -277,9 +419,18 @@
 
       <div class="floating-pill">
         <div class="legend-row" id="legend-row"></div>
-        <div style="margin-top:4px; color:var(--dim); font-size:10px; text-align:center;">
-          Drag to Orbit &bull; Right-drag or Shift-drag to Pan &bull; Pan button: left-drag &bull; Scroll to Zoom &bull; Click camera to select &bull; Click surface for sight rays
-        </div>
+      </div>
+
+      <div class="floating-pill coord-bar" id="coord-pill">
+        <span>Coord: <strong id="coord-xy">-- , --</strong></span>
+        <span>WGS84: <strong id="coord-latlon">-- , --</strong></span>
+        <span>Elev: <strong id="coord-elev">-- m</strong></span>
+        <select id="crs-select" class="coord-crs-select" title="Display Coordinate Reference System">
+          <option value="EPSG:3857">EPSG:3857</option>
+          <option value="EPSG:4326">EPSG:4326</option>
+          <option value="EPSG:32644">EPSG:32644 (UTM 44N)</option>
+          <option value="LOCAL">Local (m)</option>
+        </select>
       </div>
     </div>
   </div>
@@ -287,7 +438,7 @@
   <script src="vendor/three.min.js"></script>
   <script src="vendor/OrbitControls.js"></script>
   <script src="vendor/geotiff.js"></script>
-  <script src="lot01_aoi_data.js"></script>
-  <script src="app.js"></script>
+  <script src="lot01_aoi_data.js?v=10"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>
