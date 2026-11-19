@@ -30,9 +30,20 @@ class BuildingModelTests(unittest.TestCase):
                                                        gdal.GDT_Float32)
             dsm.SetGeoTransform((0, 1, 0, 200, 0, -1))
             dsm.SetProjection(crs())
-            dsm.GetRasterBand(1).WriteArray(np.full((200, 200), 100, np.float32))
+            surface = np.full((200, 200), 100, np.float32)
+            surface[180:190, 65:75] = 112
+            dsm.GetRasterBand(1).WriteArray(surface)
             dsm.GetRasterBand(1).SetNoDataValue(-9999)
             dsm = None
+            dtm = gdal.GetDriverByName("GTiff").Create(str(root / "dtm.tif"), 200, 200, 1,
+                                                       gdal.GDT_Float32)
+            dtm.SetGeoTransform((0, 1, 0, 200, 0, -1))
+            dtm.SetProjection(crs())
+            terrain = np.full((200, 200), 95, np.float32)
+            terrain[180:190, 65:75] = 100
+            dtm.GetRasterBand(1).WriteArray(terrain)
+            dtm.GetRasterBand(1).SetNoDataValue(-9999)
+            dtm = None
             tile = gdal.GetDriverByName("GTiff").Create(str(tiles / "height.tif"),
                                                         100, 100, 3, gdal.GDT_Float32)
             tile.SetGeoTransform((0, 0.5, 0, 50, 0, -0.5))
@@ -45,18 +56,22 @@ class BuildingModelTests(unittest.TestCase):
                 tile.GetRasterBand(band).SetNoDataValue(-99)
             tile = None
             summary = build_model(osm, tiles, root / "dsm.tif", output,
-                                  progress=lambda _: None)
-            self.assertEqual(summary["model_status"], {"ready": 1, "missing_height": 1})
+                                  dtm_path=root / "dtm.tif", progress=lambda _: None)
+            self.assertEqual(summary["model_status"], {"ready": 1, "dsm_fallback": 1})
             model = gpd.read_file(output).set_index("osm_id")
             self.assertAlmostEqual(model.loc["1", "height_m"], 5)
-            self.assertAlmostEqual(model.loc["1", "base_z_m"], 100)
-            self.assertAlmostEqual(model.loc["1", "roof_z_m"], 105)
+            self.assertAlmostEqual(model.loc["1", "base_z_m"], 95)
+            self.assertAlmostEqual(model.loc["1", "roof_z_m"], 100)
             self.assertGreater(model.loc["1", "height_support_pixels"], 0)
-            self.assertTrue(np.isnan(model.loc["2", "roof_z_m"]))
-            self.assertEqual(model.loc["2", "model_status"], "missing_height")
+            self.assertAlmostEqual(model.loc["2", "height_m"], 12)
+            self.assertAlmostEqual(model.loc["2", "base_z_m"], 100)
+            self.assertAlmostEqual(model.loc["2", "roof_z_m"], 112)
+            self.assertEqual(model.loc["2", "model_status"], "dsm_fallback")
+            self.assertEqual(model.loc["2", "height_source"], "gem15_dsm_minus_dtm")
             shifted_output = root / "shifted.gpkg"
             shifted = build_model(osm, tiles, root / "dsm.tif", shifted_output,
                                   offset_east_m=-5, offset_north_m=5,
+                                  dtm_path=root / "dtm.tif",
                                   progress=lambda _: None)
             self.assertEqual((shifted["offset_east_m"], shifted["offset_north_m"]), (-5, 5))
             moved = gpd.read_file(shifted_output).set_index("osm_id")

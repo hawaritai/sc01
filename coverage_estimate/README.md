@@ -80,9 +80,14 @@ With `data/osm_buildings_01C.gpkg` downloaded, run:
 python build_3d_buildings.py
 ```
 
+This command reads `data/gem15/GEM15_01C_DSM.tif` and
+`data/gem15/GEM15_01C_DTM.tif` by default. Use `--dsm` and `--dtm` together
+for another sublot; the rasters must share one CRS and pixel grid. Add
+`--overwrite` to replace an existing model.
+
 This joins each OSM footprint to Google Open Buildings Temporal 2023 `building_height` (band 2) where `building_presence` (band 3) is at least 0.5. It takes the median of the supported height pixels inside the OSM polygon. The output `data/osm_buildings_01C_3d.gpkg` retains every footprint and adds `height_m`, supporting-pixel count/area/fraction, height 10th/90th percentiles, and `model_status`. No OSM footprint is silently dropped. The 0.5 presence threshold is provisional: Google states that its confidence values are uncalibrated. Their height has an effective 4 m resolution despite the 0.5 m pixel spacing, so the support counts are not independent observations.
 
-For an absolute position, the script estimates `base_z_m` as the 20th percentile of valid GEM15 DSM cells in a 15–45 m ring outside each footprint, excluding mapped OSM buildings. It sets `roof_z_m = base_z_m + height_m`. This is an approximate ground estimate from a 15 m DSM, not a measured DTM. The GeoPackage stores 2D footprint geometry plus base and roof elevations: together they define a vertical-prism building for the next ray-intersection stage, rather than a detailed roof mesh. `model_status=ready` means both elevations exist and at least 16 m² / 10% of sampled footprint area supports the Google height; `low_support` preserves a tentative height for review. `missing_height` and `missing_ground` remain explicit. This model is **not yet used** by `main.py` coverage calculations.
+The script now takes `base_z_m` from the median GEM-15 DTM elevation inside each footprint. When Google provides no valid height, it estimates `height_m` from the median positive GEM-15 DSM minus DTM difference inside that footprint (1–100 m). It uses a representative-point pixel for footprints smaller than a 15 m cell. The output records `height_source`, `ground_source`, `dsm_height_m`, and sample counts so the fallback can be inspected. `roof_z_m = base_z_m + height_m`. DSM fallback models have `model_status=dsm_fallback`; Google-derived models remain `ready` or `low_support`. Missing data remain `missing_height` or `missing_ground`. The 15 m DSM may include vegetation and cannot resolve every small roof, so fallback heights need review before ray tracing. This model is **not yet used** by `main.py` coverage calculations.
 
 If the OSM footprints are displaced relative to the height raster, use an explicit translation. For 01C, 5 m west and 5 m north:
 
@@ -91,7 +96,7 @@ python build_3d_buildings.py --offset-east-m -5 --offset-north-m 5 `
   --output data\osm_buildings_01C_3d_W5_N5.gpkg
 ```
 
-East and north offsets default to zero. They are applied to the footprint geometry **before** sampling Google height and estimating DSM ground. The shifted GeoPackage records both offsets in every feature and its summary; `data/osm_buildings_01C.gpkg` remains the unshifted source. The script requires a projected east/north CRS in metres, as in the 01C EPSG:3857 file. Compare the shifted and unshifted support counts in their summaries before choosing the model for ray testing.
+East and north offsets default to -3 m and 5 m in the current command. They are applied to the footprint geometry **before** sampling Google height and GEM-15 elevations. The shifted GeoPackage records both offsets in every feature and its summary; `data/osm_buildings_01C.gpkg` remains the unshifted source. The script requires a projected east/north CRS in metres, as in the 01C EPSG:3857 file. Compare the shifted and unshifted support counts in their summaries before choosing the model for ray testing.
 
 ## Mask codes
 

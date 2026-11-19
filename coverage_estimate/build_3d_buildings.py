@@ -1,4 +1,4 @@
-"""Attribute OSM footprints with Google height and estimated ground elevation.
+"""Attribute OSM footprints with Google/GEM-15 height and DTM ground elevation.
 
 The output polygon plus base_z_m and roof_z_m represents a vertical building
 prism. It is an inspectable 2.5D model, not a detailed roof mesh.
@@ -128,38 +128,62 @@ def _height_samples(footprint, tiles: list[HeightTile], threshold: float) -> dic
     return result
 
 
-def _ground_from_dsm(footprint, dsm, other_buildings) -> tuple[float, int]:
-    """Low terrain quantile in a 15-45 m ring, excluding mapped buildings."""
-    ring = footprint.buffer(45).difference(footprint.buffer(15))
-    gt = dsm.GetGeoTransform()
-    xmin, ymin, xmax, ymax = ring.bounds
+def _surface_samples(footprint, dsm, dtm) -> dict:
+    """Sample co-registered elevations inside a building footprint.
+
+    A representative-point cell is used when a small polygon contains no
+    15 m pixel centre. DSM-derived heights remain coarse for such buildings.
+    """
+    result = {"base_z_m": np.nan, "ground_samples": 0,
+              "dsm_height_m": np.nan, "dsm_height_samples": 0}
+    gt = dtm.GetGeoTransform()
+    xmin, ymin, xmax, ymax = footprint.bounds
     x0 = max(0, math.floor((xmin - gt[0]) / gt[1]))
-    x1 = min(dsm.RasterXSize, math.ceil((xmax - gt[0]) / gt[1]))
+    x1 = min(dtm.RasterXSize, math.ceil((xmax - gt[0]) / gt[1]))
     y0 = max(0, math.floor((gt[3] - ymax) / -gt[5]))
-    y1 = min(dsm.RasterYSize, math.ceil((gt[3] - ymin) / -gt[5]))
+    y1 = min(dtm.RasterYSize, math.ceil((gt[3] - ymin) / -gt[5]))
     if x1 <= x0 or y1 <= y0:
-        return np.nan, 0
-    values = dsm.GetRasterBand(1).ReadAsArray(x0, y0, x1-x0, y1-y0)
+        return result
     xx = gt[0] + (x0 + np.arange(x1-x0) + 0.5) * gt[1]
     yy = gt[3] + (y0 + np.arange(y1-y0) + 0.5) * gt[5]
-    eligible = contains_xy(ring, xx[None, :], yy[:, None]) & np.isfinite(values)
-    nodata = dsm.GetRasterBand(1).GetNoDataValue()
-    if nodata is not None:
-        eligible &= values != nodata
-    nearby = list(other_buildings)
-    for other in nearby:
-        eligible &= ~contains_xy(other, xx[None, :], yy[:, None])
-    ground = values[eligible]
-    if len(ground) < 3:
-        return np.nan, int(len(ground))
-    return float(np.percentile(ground, 20)), int(len(ground))
+    inside = contains_xy(footprint, xx[None, :], yy[:, None])
+    if not inside.any():
+        point = footprint.representative_point()
+        col = math.floor((point.x - gt[0]) / gt[1]) - x0
+        row = math.floor((gt[3] - point.y) / -gt[5]) - y0
+        if 0 <= row < y1-y0 and 0 <= col < x1-x0:
+            inside[row, col] = True
+    if not inside.any():
+        return result
+    ground_band = dtm.GetRasterBand(1)
+    ground = ground_band.ReadAsArray(x0, y0, x1-x0, y1-y0)
+    valid_ground = inside & np.isfinite(ground)
+    ground_nodata = ground_band.GetNoDataValue()
+    if ground_nodata is not None:
+        valid_ground &= ground != ground_nodata
+    if valid_ground.any():
+        result["base_z_m"] = float(np.median(ground[valid_ground]))
+        result["ground_samples"] = int(valid_ground.sum())
+    surface_band = dsm.GetRasterBand(1)
+    surface = surface_band.ReadAsArray(x0, y0, x1-x0, y1-y0)
+    valid_surface = valid_ground & np.isfinite(surface)
+    surface_nodata = surface_band.GetNoDataValue()
+    if surface_nodata is not None:
+        valid_surface &= surface != surface_nodata
+    heights = surface - ground
+    valid_surface &= (heights >= 1) & (heights <= 100)
+    if valid_surface.any():
+        result["dsm_height_m"] = float(np.median(heights[valid_surface]))
+        result["dsm_height_samples"] = int(valid_surface.sum())
+    return result
 
 
 def build_model(osm_path: str | Path, height_dir: str | Path, dsm_path: str | Path,
                 output_path: str | Path, presence_threshold: float = 0.5,
                 min_support_area_m2: float = 16.0,
                 overwrite: bool = False, progress=print,
-                offset_east_m: float = 0.0, offset_north_m: float = 0.0) -> dict:
+                offset_east_m: float = 0.0, offset_north_m: float = 0.0,
+                dtm_path: str | Path | None = None) -> dict:
     if not 0 < presence_threshold <= 1:
         raise ValueError("presence_threshold must be in (0, 1]")
     if min_support_area_m2 < 0:
@@ -168,6 +192,9 @@ def build_model(osm_path: str | Path, height_dir: str | Path, dsm_path: str | Pa
         raise ValueError("Building offsets must be finite metres")
     osm_path, height_dir, dsm_path, output_path = map(Path,
         (osm_path, height_dir, dsm_path, output_path))
+    if dtm_path is None:
+        raise ValueError("A co-registered GEM-15 DTM is required; pass dtm_path")
+    dtm_path = Path(dtm_path)
     if output_path.exists() and not overwrite:
         raise FileExistsError(f"Output exists: {output_path}; use --overwrite")
     buildings = gpd.read_file(osm_path)
@@ -192,25 +219,35 @@ def build_model(osm_path: str | Path, height_dir: str | Path, dsm_path: str | Pa
     dsm = gdal.Open(str(dsm_path))
     if dsm is None or not dsm.GetProjection():
         raise ValueError(f"Cannot open projected DSM: {dsm_path}")
+    dtm = gdal.Open(str(dtm_path))
+    if dtm is None or not dtm.GetProjection():
+        raise ValueError(f"Cannot open projected DTM: {dtm_path}")
     gt = dsm.GetGeoTransform()
     if gt[1] <= 0 or gt[5] >= 0 or gt[2] or gt[4]:
         raise ValueError("DSM must be north-up")
+    if (dsm.RasterXSize != dtm.RasterXSize or dsm.RasterYSize != dtm.RasterYSize
+            or any(abs(a - b) > 1e-6 for a, b in zip(gt, dtm.GetGeoTransform()))
+            or not bool(osr.SpatialReference(wkt=dsm.GetProjection()).IsSame(
+                osr.SpatialReference(wkt=dtm.GetProjection())))):
+        raise ValueError("DSM and DTM must have the same CRS, dimensions, and grid")
     dsm_transform = Transformer.from_crs(buildings.crs, dsm.GetProjection(), always_xy=True).transform
     dsm_geoms = [transform(dsm_transform, geom) for geom in buildings.geometry]
-    dsm_frame = gpd.GeoSeries(dsm_geoms, crs=dsm.GetProjection())
-    index = dsm_frame.sindex
     output_rows = []
     for i, (geom, ground_geom) in enumerate(zip(buildings.geometry, dsm_geoms), 1):
         row = _height_samples(geom, tiles, presence_threshold)
-        nearby_ids = index.query(ground_geom.buffer(45), predicate="intersects")
-        nearby = (dsm_geoms[j] for j in nearby_ids if j != i-1)
-        base, count = _ground_from_dsm(ground_geom, dsm, nearby)
-        row["base_z_m"] = base
-        row["ground_samples"] = count
+        row.update(_surface_samples(ground_geom, dsm, dtm))
+        google_height = math.isfinite(row["height_m"])
+        if not google_height and math.isfinite(row["dsm_height_m"]):
+            row["height_m"] = row["dsm_height_m"]
+        base = row["base_z_m"]
+        row["height_source"] = ("google_open_buildings_2023" if google_height else
+                                "gem15_dsm_minus_dtm" if math.isfinite(row["height_m"]) else "none")
+        row["ground_source"] = "gem15_dtm" if math.isfinite(base) else "none"
         row["roof_z_m"] = (base + row["height_m"] if
                            math.isfinite(base) and math.isfinite(row["height_m"]) else np.nan)
         row["model_status"] = ("missing_height" if not math.isfinite(row["height_m"]) else
                                "missing_ground" if not math.isfinite(base) else
+                               "dsm_fallback" if not google_height else
                                "low_support" if row["height_support_area_m2"] < min_support_area_m2
                                or row["height_support_fraction"] < 0.1 else "ready")
         output_rows.append(row)
@@ -218,10 +255,6 @@ def build_model(osm_path: str | Path, height_dir: str | Path, dsm_path: str | Pa
             progress(f"Attributed {i:,}/{len(buildings):,} buildings")
     for column in output_rows[0]:
         buildings[column] = [row[column] for row in output_rows]
-    buildings["height_source"] = np.where(buildings["height_m"].notna(),
-                                           "google_open_buildings_2023", "none")
-    buildings["ground_source"] = np.where(buildings["base_z_m"].notna(),
-                                           "gem15_dsm_ring_p20", "none")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = output_path.with_name(output_path.stem + ".partial.gpkg")
     if temporary.exists():
@@ -234,19 +267,21 @@ def build_model(osm_path: str | Path, height_dir: str | Path, dsm_path: str | Pa
             temporary.unlink()
     status = buildings["model_status"].value_counts().to_dict()
     summary = {"osm": str(osm_path), "height_tiles": str(height_dir),
-               "height_tile_count": len(tiles), "dsm": str(dsm_path),
+               "height_tile_count": len(tiles), "dsm": str(dsm_path), "dtm": str(dtm_path),
                "output": str(output_path), "buildings": len(buildings),
                "offset_east_m": offset_east_m, "offset_north_m": offset_north_m,
                "height_dataset_year": 2023,
                "presence_threshold": presence_threshold,
                "min_support_area_m2": min_support_area_m2,
                "min_support_fraction": 0.1, "model_status": status,
-               "ground_estimate": "DSM non-building ring 15-45 m, 20th percentile",
+               "ground_estimate": "median GEM-15 DTM inside each footprint",
+               "height_fallback": "median positive GEM-15 DSM minus DTM inside each footprint (1-100 m)",
+               "height_source": buildings["height_source"].value_counts().to_dict(),
                "median_height_m": (float(buildings["height_m"].median()) if
                                     buildings["height_m"].notna().any() else None),
                "note": "Polygon footprints with base/roof attributes define vertical prisms. "
-                       "Ground elevation is an approximate DSM ring estimate, not a DTM. "
-                       "Height uses 2023 Google data; inspect model_status before ray tracing."}
+                       "DSM fallback is coarse at 15 m and may contain vegetation; "
+                       "inspect model_status and height_source before ray tracing."}
     output_path.with_suffix(".summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
 
@@ -256,8 +291,8 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--osm", default=str(root / "data" / "osm_buildings_01C.gpkg"))
     parser.add_argument("--height-dir", default=str(root / "data" / "L1_open_building"))
-    parser.add_argument("--dsm", default=str(root.parent / "TrueOrtho_test" / "data" /
-                                             "GEM15_SriLanka_DSM_polygon1.tif"))
+    parser.add_argument("--dsm", default=str(root / "data" / "gem15" / "GEM15_01C_DSM.tif"))
+    parser.add_argument("--dtm", default=str(root / "data" / "gem15" / "GEM15_01C_DTM.tif"))
     parser.add_argument("--output", default=str(root / "data" / "osm_buildings_01C_3d.gpkg"))
     parser.add_argument("--presence-threshold", type=float, default=0.5)
     parser.add_argument("--min-support-area-m2", type=float, default=16.0)
@@ -271,7 +306,7 @@ def main(argv=None) -> int:
         summary = build_model(args.osm, args.height_dir, args.dsm, args.output,
                               args.presence_threshold, args.min_support_area_m2,
                               args.overwrite, offset_east_m=args.offset_east_m,
-                              offset_north_m=args.offset_north_m)
+                              offset_north_m=args.offset_north_m, dtm_path=args.dtm)
     except Exception as exc:
         parser.exit(1, f"ERROR: {exc}\n")
     print(json.dumps(summary["model_status"], indent=2))
