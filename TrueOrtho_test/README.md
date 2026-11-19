@@ -2,6 +2,8 @@
 
 Interactive Three.js 3D visibility, footprint, and flight-plan justification simulator for True Orthophoto production (**Phase One iXM-150 RGB 40mm** camera model, real Sri Lanka Lot 01 & GEM15 DSM/OSM datasets, and custom user uploads).
 
+For the code layout and data flow, see [Code and data overview](ARCHITECTURE.md).
+
 ---
 
 ## 1. Running This Project on Another PC
@@ -11,7 +13,7 @@ All runtime libraries (`vendor/three.min.js`, `vendor/OrbitControls.js`, `vendor
 ### Option A — Windows One-Click Launcher (Recommended)
 1. Extract the portable `.zip` archive on the target PC.
 2. Open the extracted folder and double-click **`start_server.bat`**.
-3. It automatically starts a local HTTP server on `http://localhost:8090` (using Python or Node.js if installed) and opens the simulator in your browser.
+3. It starts a local HTTP server using Python or Node.js if installed. Open `http://localhost:8090` in your browser.
 4. If neither Python nor Node.js is installed, `start_server.bat` opens `index.html` directly in your browser.
 
 ### Option B — macOS / Linux Launcher

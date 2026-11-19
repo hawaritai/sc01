@@ -18,7 +18,8 @@ const GeoTIFF = require(path.join(__dirname, "vendor", "geotiff.js"));
 
 const DATA_DIR = path.join(__dirname, "data");
 const AOI_DIR = path.join(DATA_DIR, "AOI");
-const LOT01_POINT_DBF = "D:\\Projects\\0_Current_projects\\SC01\\FlightPlan\\Lot_01\\SC01_Lot01_2112_Plan_Point.dbf";
+const LOT01_POINT_DBF = "D:\\projects\\SC01\\FlightPlan\\Lot_01\\SC01_Lot01_2112_Plan_Point.dbf";
+// const LOT01_POINT_DBF = "D:\\Projects\\0_Current_projects\\SC01\\FlightPlan\\Lot_01\\SC01_Lot01_2112_Plan_Point.dbf";
 const LOT01_DATA_JS = path.join(__dirname, "lot01_aoi_data.js");
 
 function wgs84ToEpsg3857(lat, lon) {
